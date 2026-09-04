@@ -8,8 +8,6 @@ Return replaces the selection.
 ⌘C copies.
 The field you were in keeps focus.
 
-![Overlay translating English to Brazilian Portuguese](docs/screenshots/02-overlay.png)
-
 `branch` stays `branch`.
 Portuguese means Brazilian Portuguese, not Spanish.
 
@@ -21,6 +19,8 @@ Portuguese means Brazilian Portuguese, not Spanish.
 
 1. Press the shortcut.
    The overlay streams the translation.
+
+   ![Overlay translating English to Brazilian Portuguese](docs/screenshots/02-overlay.png)
 
 1. Press Return to write it back, or ⌘C to copy.
 
