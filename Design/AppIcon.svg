@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F766E"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g fill="#FFFFFF" text-anchor="middle">
+    <text x="312" y="640" font-family="Hiragino Sans GB, PingFang SC, Songti SC, sans-serif" font-size="420" font-weight="700">&#x6587;</text>
+    <text x="712" y="640" font-family="SF Pro Display, Helvetica Neue, Helvetica, sans-serif" font-size="400" font-weight="700">A</text>
+  </g>
+  <g fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" opacity="0.92">
+    <path d="M470 430 L554 430 L530 406"/>
+    <path d="M554 594 L470 594 L494 618"/>
+  </g>
+</svg>

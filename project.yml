@@ -1,0 +1,68 @@
+name: Translate
+options:
+  bundleIdPrefix: com.frank
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+packages:
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 3.0.0
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+targets:
+  Translate:
+    type: application
+    platform: macOS
+    sources:
+      - Translate
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.frank.translate
+        PRODUCT_NAME: Translate
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Translate/Info.plist
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: NO
+        COMBINE_HIDPI_IMAGES: YES
+        DEAD_CODE_STRIPPING: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ENABLE_TESTABILITY: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: Apple Development
+        DEVELOPMENT_TEAM: 5SHK9HF6W4
+      configs:
+        debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+        release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+    dependencies:
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
+      - sdk: Translation.framework
+        weak: true
+    scheme:
+      testTargets:
+        - TranslateTests
+  TranslateTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - TranslateTests
+    dependencies:
+      - target: Translate
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.frank.translate.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Translate.app/Contents/MacOS/Translate"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        ENABLE_TESTABILITY: YES
