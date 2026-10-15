@@ -16,6 +16,19 @@ nonisolated enum AppleTranslation {
     return "Requires macOS 26."
   }
 
+  static let cannotProofreadMessage =
+    "Apple Translate cannot proofread; choose Local, Claude or Codex in Settings."
+
+  /// True when the text is already in the target language, so the job is proofreading,
+  /// which Apple Translate can't do.
+  static func isSameLanguage(text: String, targetLanguage: String) -> Bool {
+    guard
+      let target = AppleLanguageMapper.language(from: targetLanguage),
+      let source = AppleLanguageMapper.detectedLanguage(in: text)
+    else { return false }
+    return AppleLanguageMapper.sameLanguage(source, target)
+  }
+
   static func translate(
     text: String,
     targetLanguage: String,
@@ -63,9 +76,10 @@ nonisolated enum AppleTranslation {
     await trace("source=\(AppleLanguageMapper.code(source)) target=\(AppleLanguageMapper.code(target))")
 
     if AppleLanguageMapper.sameLanguage(source, target) {
-      await trace("source equals target, skipping")
-      await onPartial(text)
-      return text
+      // TranslationSession can't proofread; Translator stops this case before reaching here.
+      // Never echo the input back as a result.
+      await trace("source equals target")
+      throw TranslatorError.appleUnavailable(cannotProofreadMessage)
     }
 
     let availability = LanguageAvailability()
@@ -225,6 +239,8 @@ nonisolated enum AppleLanguageMapper {
     "portugues": "pt-BR",
     "pt": "pt-BR",
     "pt-br": "pt-BR",
+    "european portuguese": "pt-PT",
+    "pt-pt": "pt-PT",
     "french": "fr",
     "français": "fr",
     "spanish": "es",
@@ -237,6 +253,24 @@ nonisolated enum AppleLanguageMapper {
     "chinese": "zh-Hans",
     "simplified chinese": "zh-Hans",
     "traditional chinese": "zh-Hant",
+    // The rest of the settings catalog, which sends English names.
+    "dutch": "nl",
+    "swedish": "sv",
+    "danish": "da",
+    "norwegian": "nb",
+    "finnish": "fi",
+    "polish": "pl",
+    "czech": "cs",
+    "ukrainian": "uk",
+    "russian": "ru",
+    "greek": "el",
+    "turkish": "tr",
+    "arabic": "ar",
+    "hebrew": "he",
+    "hindi": "hi",
+    "indonesian": "id",
+    "vietnamese": "vi",
+    "thai": "th",
   ]
 }
 

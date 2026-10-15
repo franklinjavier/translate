@@ -12,8 +12,8 @@ struct StreamingText: View {
 
   var body: some View {
     (Text(revealed) + incomingRun + caretRun)
-      .font(.system(size: 16))
-      .lineSpacing(4)
+      .font(.system(size: PopoverMetrics.bodySize))
+      .lineSpacing(PopoverMetrics.bodyLineSpacing)
       .foregroundStyle(.primary)
       .textSelection(.enabled)
       .frame(maxWidth: .infinity, alignment: .leading)

@@ -1,0 +1,86 @@
+[
+  {
+    "id": "comparison",
+    "source": "Like Notion and Obsidian had a baby.",
+    "target": "english",
+    "output": "Notion and Obsidian had a baby.",
+    "seconds": 3.05
+  },
+  {
+    "id": "negative",
+    "source": "I have not reviewed either PR yet.",
+    "target": "english",
+    "output": "I haven't reviewed either PR yet.",
+    "seconds": 2.81
+  },
+  {
+    "id": "uncertain",
+    "source": "Talvez eu consiga revisar os dois PRs hoje, mas não prometo.",
+    "target": "english",
+    "output": "Maybe I can review both PRs today, but I don't promise.",
+    "seconds": 2.93
+  },
+  {
+    "id": "request",
+    "source": "Você consegue revisar isso quando tiver um tempo?",
+    "target": "english",
+    "output": "Can you take a look at this when you got a moment?",
+    "seconds": 2.88
+  },
+  {
+    "id": "fragment",
+    "source": "No conflicts with the base branch.",
+    "target": "english",
+    "output": "No conflicts with the base branch.",
+    "seconds": 2.53
+  },
+  {
+    "id": "present",
+    "source": "Both are reviewed every Friday.",
+    "target": "english",
+    "output": "Both are reviewed every Friday.",
+    "seconds": 5.43
+  },
+  {
+    "id": "past",
+    "source": "Yesterday both pull requests are reviewed.",
+    "target": "english",
+    "output": "Both PRs were reviewed yesterday.",
+    "seconds": 2.47
+  },
+  {
+    "id": "passive",
+    "source": "Os dois já foram revisados.",
+    "target": "english",
+    "output": "Both were reviewed.",
+    "seconds": 2.37
+  },
+  {
+    "id": "technical",
+    "source": "Não rode `git push --force` na branch main.",
+    "target": "english",
+    "output": "Don't run `git push --force` on the main branch.",
+    "seconds": 5.68
+  },
+  {
+    "id": "compare_pt",
+    "source": "Like Notion and Obsidian had a baby.",
+    "target": "Brazilian Portuguese",
+    "output": "É como se Notion e Obsidian tivessem um filho.",
+    "seconds": 2.87
+  },
+  {
+    "id": "chat",
+    "source": "vou dar uma olhada e te aviso",
+    "target": "english",
+    "output": "I’ll take a look and let you know.",
+    "seconds": 2.82
+  },
+  {
+    "id": "numbers",
+    "source": "O timeout passou de 30 ms para 300 ms, não 3 segundos.",
+    "target": "english",
+    "output": "Timeout went from 30ms to 300ms, not 3 seconds.",
+    "seconds": 3.21
+  }
+]

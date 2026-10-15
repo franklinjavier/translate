@@ -47,6 +47,12 @@ nonisolated struct Translator: Sendable {
     }
 
     if useAppleOnDeviceModel {
+      // Apple is exclusive: it only maps between languages, and never falls back to a CLI or
+      // the local server to proofread.
+      if AppleTranslation.isSameLanguage(text: text, targetLanguage: targetLanguage) {
+        await trace("same language as \(targetLanguage), Apple can't proofread")
+        throw TranslatorError.appleUnavailable(AppleTranslation.cannotProofreadMessage)
+      }
       let raw = try await AppleTranslation.translate(
         text: text,
         targetLanguage: targetLanguage,
