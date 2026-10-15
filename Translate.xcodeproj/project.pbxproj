@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		15CBA0A04F82B710311C85C2 /* SelectionGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35FC59E20778F02B25BC99D9 /* SelectionGeometryTests.swift */; };
 		198DC894FB969FF1D51DDCEC /* OverlayHotkeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 086E643666F6A2169BD32C42 /* OverlayHotkeys.swift */; };
 		1B1D23FFD7CA341E16DA0A2E /* StreamingText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77118FAF7F5D1573AB307C47 /* StreamingText.swift */; };
 		2321D67113435159E8FC4662 /* Translation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0F40925120133E02DCBFC19 /* Translation.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
@@ -24,6 +25,7 @@
 		B83D63FA0E06C3CC9E942A92 /* PromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = D83BE8F0AF01EB39C50CFD64 /* PromptBuilder.swift */; };
 		B938B00ED71AC5786281F508 /* TranslationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04A84D668408DA83E197E26 /* TranslationView.swift */; };
 		C61878A10F27CAD8B32D0CF4 /* TranslateApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 863D0682351C2D9FBBA6D4F1 /* TranslateApp.swift */; };
+		CDF10458A05F68EB97A76BCA /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A60B973A41A968A3F06ED3 /* SettingsTests.swift */; };
 		DA4E904B3A1E9E1A3AC045BE /* OverlayPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53B2C108335363F8DD8AC3D /* OverlayPanel.swift */; };
 		E491DC928F31BE63E3DE6558 /* Translator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D035F9A3D52EF88117600683 /* Translator.swift */; };
 		F14741131A7A393BD7FC0479 /* LocalMLX.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E3932026AFDFEE1968BB1C /* LocalMLX.swift */; };
@@ -47,10 +49,12 @@
 		2A09705B9E4AB3644B3928ED /* ShellEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellEnvironment.swift; sourceTree = "<group>"; };
 		2BC25883ACC9A9A2813BD7FA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		2BCD96A4D2B76F0B3C26B81A /* ClaudeStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeStream.swift; sourceTree = "<group>"; };
+		35FC59E20778F02B25BC99D9 /* SelectionGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionGeometryTests.swift; sourceTree = "<group>"; };
 		3E15BD46498181AF1493BC30 /* AppleTranslation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTranslation.swift; sourceTree = "<group>"; };
 		55DB8AACB95388EC0DF3A6F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		620F374ACB7A6EEDEC3BB6C6 /* PromptBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptBuilderTests.swift; sourceTree = "<group>"; };
 		623CAEF20A40670E2B8C6DF7 /* TextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextCapture.swift; sourceTree = "<group>"; };
+		63A60B973A41A968A3F06ED3 /* SettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTests.swift; sourceTree = "<group>"; };
 		77118FAF7F5D1573AB307C47 /* StreamingText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingText.swift; sourceTree = "<group>"; };
 		863D0682351C2D9FBBA6D4F1 /* TranslateApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateApp.swift; sourceTree = "<group>"; };
 		A04A84D668408DA83E197E26 /* TranslationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationView.swift; sourceTree = "<group>"; };
@@ -133,6 +137,8 @@
 			isa = PBXGroup;
 			children = (
 				620F374ACB7A6EEDEC3BB6C6 /* PromptBuilderTests.swift */,
+				35FC59E20778F02B25BC99D9 /* SelectionGeometryTests.swift */,
+				63A60B973A41A968A3F06ED3 /* SettingsTests.swift */,
 			);
 			path = TranslateTests;
 			sourceTree = "<group>";
@@ -256,6 +262,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				872AA06FF0581AB561D70A55 /* PromptBuilderTests.swift in Sources */,
+				15CBA0A04F82B710311C85C2 /* SelectionGeometryTests.swift in Sources */,
+				CDF10458A05F68EB97A76BCA /* SettingsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

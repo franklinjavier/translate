@@ -9,24 +9,37 @@ private let log = Logger(subsystem: "com.frank.translate", category: "app")
 @Observable
 final class AppModel {
   var settings: AppSettings {
-    didSet { settings.save() }
+    didSet {
+      guard isLive, settings != oldValue else { return }
+      settings.save()
+    }
   }
 
   var overlay = OverlayState()
 
   private let panel = OverlayPanel()
+  /// False keeps settings in memory and leaves global shortcuts, the selection tracker
+  /// and login items alone, for tests and offscreen snapshots.
+  private let isLive: Bool
   private var translationTask: Task<Void, Never>?
   private var translationGeneration = 0
   private var registeredIDs: Set<UUID> = []
 
-  init() {
-    settings = .load()
+  convenience init() {
+    self.init(settings: .load(), isLive: true)
+  }
+
+  init(settings: AppSettings, isLive: Bool) {
+    self.settings = settings
+    self.isLive = isLive
     panel.state = overlay
     panel.onCopy = { [weak self] in self?.copyTranslation() }
     panel.onReplace = { [weak self] in self?.replaceSelection() }
     panel.onClose = { [weak self] in self?.dismissOverlay() }
     panel.onOpenAccessibility = { TextCapture.openAccessibilitySettings() }
     panel.onRetry = { [weak self] in self?.retryLastTranslation() }
+    guard isLive else { return }
+    TextCapture.startTrackingSelections()
     installDefaultShortcuts()
     registerHotkeys()
   }
@@ -50,8 +63,11 @@ final class AppModel {
     translationTask?.cancel()
     overlay.copiedRecently = false
     overlay.replacedRecently = false
+    // Read where the selection is before the panel exists on screen, while the
+    // source app still owns focus and the mouse is where the shortcut was pressed.
+    let anchor = invocationAnchor()
     overlay.phase = .loading(target: target, source: "")
-    panel.presentUnfocused()
+    panel.presentUnfocused(anchor: anchor)
 
     translationTask = Task { [weak self] in
       guard let self else { return }
@@ -61,6 +77,7 @@ final class AppModel {
       }
 
       let source = await TextCapture.selectedText()
+      guard generation == self.translationGeneration, !Task.isCancelled else { return }
 
       if let source {
         self.overlay.phase = .loading(target: target, source: source)
@@ -149,30 +166,40 @@ final class AppModel {
     overlay.replacedRecently = true
     overlay.copiedRecently = false
     let original = overlay.capturedSource()
+    let generation = translationGeneration
     Task {
       _ = await TextCapture.replaceSelectedText(with: translation, matching: original)
       await MainActor.run {
+        // A new shortcut press during the paste owns the overlay now; leave it open.
+        guard generation == self.translationGeneration else { return }
         self.dismissOverlay()
       }
     }
   }
 
-  func addTarget() {
-    settings.targets.append(
-      TranslationTarget(id: UUID(), label: "New language", language: "French")
-    )
+  @discardableResult
+  func addTarget(_ language: TranslationLanguage) -> UUID {
+    let target = settings.addTarget(language)
     registerHotkeys()
+    return target.id
   }
 
-  func removeTarget(_ target: TranslationTarget) {
-    guard settings.targets.count > 1 else { return }
-    KeyboardShortcuts.removeHandler(for: target.shortcutName)
-    KeyboardShortcuts.setShortcut(nil, for: target.shortcutName)
-    settings.targets.removeAll { $0.id == target.id }
+  /// Binds a settings row by ID, never by array index; see `AppSettings[targetID:fallback:]`.
+  func targetBinding(for target: TranslationTarget) -> Binding<TranslationTarget> {
+    Bindable(self).settings[targetID: target.id, fallback: target]
+  }
+
+  /// Unknown IDs and the last language are left alone.
+  func removeTarget(id: UUID) {
+    guard let removed = settings.removeTarget(id: id) else { return }
+    guard isLive else { return }
+    KeyboardShortcuts.removeHandler(for: removed.shortcutName)
+    KeyboardShortcuts.setShortcut(nil, for: removed.shortcutName)
     registerHotkeys()
   }
 
   func registerHotkeys() {
+    guard isLive else { return }
     let currentIDs = Set(settings.targets.map(\.id))
     for id in registeredIDs where !currentIDs.contains(id) {
       let name = KeyboardShortcuts.Name("translate.\(id.uuidString)")
@@ -192,7 +219,14 @@ final class AppModel {
     registeredIDs = currentIDs
   }
 
+  /// The toggle mirrors the system's login item, which the user can change in System Settings.
+  func syncLaunchAtLogin() {
+    guard isLive else { return }
+    settings.launchAtLogin = SMAppService.mainApp.status == .enabled
+  }
+
   func applyLaunchAtLogin() {
+    guard isLive else { return }
     let service = SMAppService.mainApp
     do {
       if settings.launchAtLogin {
@@ -203,6 +237,31 @@ final class AppModel {
     } catch {
       log.error("Launch at login failed: \(error.localizedDescription, privacy: .public)")
     }
+  }
+
+  /// Accessibility bounds first, the tracked mouse selection when the app hides them,
+  /// and the pointer only when neither knows where the text is.
+  private func invocationAnchor() -> OverlayAnchor {
+    let screens = OverlayPanel.currentScreens()
+    var accessibilityRect: CGRect?
+    if TextCapture.isTrusted,
+       let primary = NSScreen.screens.first,
+       let bounds = TextCapture.selectionBounds() {
+      let rect = OverlayPlacement.appKitRect(
+        fromAccessibility: bounds,
+        primaryScreenHeight: primary.frame.maxY
+      )
+      if OverlayPlacement.isUsable(rect, on: screens) {
+        accessibilityRect = rect
+      }
+    }
+    let dragRect = TextCapture.trackedSelectionRect().flatMap {
+      OverlayPlacement.isUsable($0, on: screens) ? $0 : nil
+    }
+    if let rect = SelectionGeometry.anchorRect(accessibility: accessibilityRect, drag: dragRect) {
+      return .selection(rect)
+    }
+    return .point(NSEvent.mouseLocation)
   }
 
   private func finish(generation: Int, phase: OverlayState.Phase) {

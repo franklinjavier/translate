@@ -11,7 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     setupStatusItem()
     observeSettingsClose()
-    if !isLaunchedAtLogin() {
+    // Test runs host the app; popping the window there would steal focus.
+    if !isLaunchedAtLogin() && !isRunningTests() {
       openSettings()
     }
   }
@@ -120,12 +121,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
-      styleMask: [.titled, .closable, .miniaturizable],
+      contentRect: NSRect(origin: .zero, size: SettingsView.size),
+      styleMask: [.titled, .closable],
       backing: .buffered,
       defer: false
     )
     window.title = "Translate"
+    // Follows the system appearance; the title bar blends into the white or black content.
+    window.titlebarAppearsTransparent = true
+    window.backgroundColor = .settingsBackground
+    window.isMovableByWindowBackground = true
+    window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+    window.standardWindowButton(.zoomButton)?.isHidden = true
     window.contentView = NSHostingView(rootView: SettingsView(model: model))
     window.isReleasedWhenClosed = false
     window.collectionBehavior = [.moveToActiveSpace]
@@ -167,6 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.delegate = self
     item.menu = menu
     statusItem = item
+  }
+
+  private func isRunningTests() -> Bool {
+    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
   }
 
   private func isLaunchedAtLogin() -> Bool {

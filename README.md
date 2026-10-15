@@ -13,18 +13,11 @@ Portuguese means Brazilian Portuguese, not Spanish.
 
 ## The loop
 
-1. Select text in any app Accessibility can read.
+Select text in any app Accessibility can read, then press the shortcut.
+The translation appears in a compact popover next to the selection.
+Press Return to replace the text, or ⌘C to copy.
 
-   ![English text selected in TextEdit](docs/screenshots/01-select.png)
-
-1. Press the shortcut.
-   The overlay streams the translation.
-
-   ![Overlay translating English to Brazilian Portuguese](docs/screenshots/02-overlay.png)
-
-1. Press Return to write it back, or ⌘C to copy.
-
-   ![The same document after Replace](docs/screenshots/03-replaced.png)
+![Selected English text and the Portuguese translation popover in TextEdit](docs/screenshots/translate-popover.png)
 
 Default shortcuts are ⌘⌥I (English) and ⌘⌥U (Portuguese).
 Record your own in Settings.
