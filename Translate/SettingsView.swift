@@ -21,7 +21,7 @@ struct SettingsView: View {
   @Bindable var model: AppModel
   @State private var accessibilityGranted = TextCapture.isTrusted
 
-  static let size = CGSize(width: 520, height: 560)
+  static let size = CGSize(width: 460, height: 560)
 
   var body: some View {
     ScrollView {
@@ -49,8 +49,8 @@ struct SettingsView: View {
 
   private var languagesSection: some View {
     SettingsSection(
-      "Languages",
-      footer: "Each shortcut translates the selection into its row’s language. Names are only for you."
+      "Translate to",
+      footer: "Pick a language and record a shortcut. The shortcut translates the selection into that language."
     ) {
       // Rows are keyed and bound by ID. A row still on screen after its language is removed
       // reads its last snapshot instead of indexing past the end of `targets`.
@@ -179,7 +179,7 @@ struct SettingsView: View {
   }
 }
 
-/// Name → destination, shortcut, remove. Bound by ID through `AppModel.targetBinding(for:)`.
+/// Destination, shortcut, remove. Bound by ID through `AppModel.targetBinding(for:)`.
 private struct LanguageRow: View {
   @Binding var target: TranslationTarget
   var canRemove: Bool
@@ -187,12 +187,6 @@ private struct LanguageRow: View {
 
   var body: some View {
     HStack(spacing: 8) {
-      SettingsField(label: "Name", prompt: "Name", text: $target.label)
-        .frame(width: 110)
-      Image(systemName: "arrow.right")
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(Color.primary.opacity(0.35))
-        .accessibilityHidden(true)
       Picker("Translate to", selection: destination) {
         if target.isLegacyLanguage {
           // A destination saved before the picker existed stays selected, as written.
@@ -205,8 +199,9 @@ private struct LanguageRow: View {
       }
       .pickerStyle(.menu)
       .labelsHidden()
-      .controlSize(.small)
-      .frame(maxWidth: .infinity)
+      .font(.system(size: 14))
+      .controlSize(.regular)
+      .frame(maxWidth: .infinity, alignment: .leading)
       KeyboardShortcuts.Recorder(for: target.shortcutName)
         .fixedSize()
       Button(action: onRemove) {

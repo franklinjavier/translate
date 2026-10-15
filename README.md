@@ -22,6 +22,13 @@ Press Return to replace the text, or ⌘C to copy.
 Default shortcuts are ⌘⌥I (English) and ⌘⌥U (Portuguese).
 Record your own in Settings.
 
+## Settings
+
+Pick a language, record its shortcut, and choose the translation engine.
+Settings follows the macOS light or dark appearance.
+
+![Translate settings with language selectors, shortcuts, and engine selection](docs/screenshots/settings.png)
+
 ## Engines
 
 - **Local** — Qwen3-4B on MLX at `127.0.0.1:8765`. Offline, streamed.

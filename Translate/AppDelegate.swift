@@ -1,5 +1,4 @@
 import AppKit
-import KeyboardShortcuts
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -24,20 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func menuNeedsUpdate(_ menu: NSMenu) {
     menu.removeAllItems()
-
-    for target in model.settings.targets {
-      let item = NSMenuItem(
-        title: "Translate to \(target.label)",
-        action: #selector(translateFromMenu(_:)),
-        keyEquivalent: ""
-      )
-      item.target = self
-      item.representedObject = target.id.uuidString
-      item.setShortcut(for: target.shortcutName)
-      menu.addItem(item)
-    }
-
-    menu.addItem(.separator())
 
     let localItem = NSMenuItem(
       title: "Use Local MLX",
@@ -79,14 +64,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
     quitItem.target = self
     menu.addItem(quitItem)
-  }
-
-  @objc func translateFromMenu(_ sender: NSMenuItem) {
-    guard
-      let raw = sender.representedObject as? String,
-      let id = UUID(uuidString: raw)
-    else { return }
-    model.translate(toID: id)
   }
 
   @objc func useLocalEngine() {
