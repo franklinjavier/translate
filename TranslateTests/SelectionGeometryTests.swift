@@ -123,12 +123,41 @@ struct DragSelectionTrackerTests {
     #expect(tracker.selection(frontmostPID: 7) == nil)
   }
 
-  @Test func onlySelectionChangingKeysInvalidate() {
-    #expect(DragSelectionTracker.keyChangesSelection(keyCode: kVK_LeftArrow, command: false, control: false))
-    #expect(DragSelectionTracker.keyChangesSelection(keyCode: kVK_ANSI_A, command: true, control: false))
-    #expect(!DragSelectionTracker.keyChangesSelection(keyCode: kVK_ANSI_C, command: true, control: false))
-    #expect(!DragSelectionTracker.keyChangesSelection(keyCode: kVK_ANSI_I, command: true, control: false))
-    #expect(!DragSelectionTracker.keyChangesSelection(keyCode: kVK_ANSI_E, command: false, control: true))
+  @Test(arguments: [
+    (kVK_LeftArrow, false, false, false),
+    (kVK_LeftArrow, true, false, false), // ⌘← line start
+    (kVK_DownArrow, true, false, false), // ⌘↓ document end
+    (kVK_RightArrow, false, true, false), // ⌥→ word
+    (kVK_ANSI_E, false, false, true), // ⌃E line end
+    (kVK_ANSI_A, true, false, false), // ⌘A
+    (kVK_ANSI_V, true, false, false), // ⌘V
+    (kVK_ANSI_Z, true, false, false), // ⌘Z
+    (kVK_ANSI_C, true, true, false), // ⌘⌥C is not Copy
+    (kVK_ANSI_X, false, false, false),
+  ])
+  func navigationAndEditingKeysInvalidate(key: Int, command: Bool, option: Bool, control: Bool) {
+    #expect(DragSelectionTracker.keyChangesSelection(
+      keyCode: key, command: command, option: option, control: control, shift: false, isTranslateShortcut: false
+    ))
+  }
+
+  @Test func shiftedCommandKeysInvalidate() {
+    // ⌘⇧C, ⌘⇧← and similar can edit or extend the selection in some apps.
+    #expect(DragSelectionTracker.keyChangesSelection(
+      keyCode: kVK_ANSI_C, command: true, option: false, control: false, shift: true, isTranslateShortcut: false
+    ))
+    #expect(DragSelectionTracker.keyChangesSelection(
+      keyCode: kVK_LeftArrow, command: true, option: false, control: false, shift: true, isTranslateShortcut: false
+    ))
+  }
+
+  @Test func copyAndTranslateShortcutsKeepTheDrag() {
+    #expect(!DragSelectionTracker.keyChangesSelection(
+      keyCode: kVK_ANSI_C, command: true, option: false, control: false, shift: false, isTranslateShortcut: false
+    ))
+    #expect(!DragSelectionTracker.keyChangesSelection(
+      keyCode: kVK_ANSI_I, command: true, option: true, control: false, shift: false, isTranslateShortcut: true
+    ))
   }
 
   @Test func popoverClearsEveryLineOfATrackedSelection() {

@@ -56,7 +56,9 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - TranslateTests
+      - path: TranslateTests
+        excludes:
+          - Fixtures
     dependencies:
       - target: Translate
     settings:

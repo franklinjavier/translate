@@ -80,7 +80,8 @@ nonisolated final class OverlayEventTap: @unchecked Sendable {
       }
       return Unmanaged.passUnretained(event)
     }
-    guard type == .keyDown else {
+    // Our own ⌘C and ⌘V go to the source app; reading them as Copy would hijack a capture.
+    guard type == .keyDown, event.getIntegerValueField(.eventSourceUserData) != SyntheticKeys.marker else {
       return Unmanaged.passUnretained(event)
     }
 

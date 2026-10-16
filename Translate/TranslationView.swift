@@ -17,7 +17,7 @@ struct TranslationView: View {
       case .loading(let target, _):
         popover {
           loadingBody
-          footer(label: target.label, actionsEnabled: false)
+          footer(label: target.label, actionsEnabled: false, replaceEnabled: false)
         }
       case .streaming(let target, _, let translation),
            .result(let target, _, let translation):
@@ -25,7 +25,7 @@ struct TranslationView: View {
           scrollable {
             StreamingText(text: translation, isStreaming: isStreaming)
           }
-          footer(label: target.label, actionsEnabled: true)
+          footer(label: target.label, actionsEnabled: true, replaceEnabled: state.canReplace)
         }
       case .error(let message, let recovery):
         popover {
@@ -55,12 +55,13 @@ struct TranslationView: View {
     .environment(\.colorScheme, .dark)
   }
 
-  private func footer(label: String, actionsEnabled: Bool) -> some View {
+  private func footer(label: String, actionsEnabled: Bool, replaceEnabled: Bool) -> some View {
     PopoverFooter(
       label: label,
       copied: state.copiedRecently,
       replaced: state.replacedRecently,
       actionsEnabled: actionsEnabled,
+      replaceEnabled: replaceEnabled,
       onCopy: onCopy,
       onReplace: onReplace
     )
@@ -130,6 +131,8 @@ struct PopoverFooter: View {
   var copied: Bool
   var replaced: Bool
   var actionsEnabled: Bool
+  /// Off while the translation is still streaming.
+  var replaceEnabled = true
   var onCopy: () -> Void
   var onReplace: () -> Void
 
@@ -155,6 +158,8 @@ struct PopoverFooter: View {
           keys: PopoverContent.replaceKeys,
           perform: onReplace
         )
+        .disabled(!replaceEnabled)
+        .opacity(replaceEnabled || !actionsEnabled ? 1 : 0.45)
         .accessibilityLabel("Replace")
       }
       .fixedSize()

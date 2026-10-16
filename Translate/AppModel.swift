@@ -15,31 +15,42 @@ final class AppModel {
     }
   }
 
-  var overlay = OverlayState()
+  let overlay: OverlayState
 
-  private let panel = OverlayPanel()
-  /// False keeps settings in memory and leaves global shortcuts, the selection tracker
-  /// and login items alone, for tests and offscreen snapshots.
-  private let isLive: Bool
-  private var translationTask: Task<Void, Never>?
-  private var translationGeneration = 0
+  /// False keeps settings in memory and leaves global shortcuts, the selection tracker,
+  /// the pasteboard and login items alone, for tests and offscreen snapshots.
+  let isLive: Bool
+  private let panel: OverlayPanel
+  @ObservationIgnored private let session: TranslationCoordinator
   private var registeredIDs: Set<UUID> = []
 
   convenience init() {
     self.init(settings: .load(), isLive: true)
   }
 
-  init(settings: AppSettings, isLive: Bool) {
+  /// `coordinator` replaces the one wired to the panel and live boundaries, for tests.
+  init(settings: AppSettings, isLive: Bool, coordinator: TranslationCoordinator? = nil) {
+    let panel = OverlayPanel()
+    let session = coordinator ?? TranslationCoordinator(
+      overlay: OverlayState(),
+      presenter: panel,
+      boundaries: isLive ? Self.liveBoundaries() : Self.inertBoundaries
+    )
+    panel.state = session.overlay
     self.settings = settings
     self.isLive = isLive
-    panel.state = overlay
+    self.overlay = session.overlay
+    self.panel = panel
+    self.session = session
     panel.onCopy = { [weak self] in self?.copyTranslation() }
-    panel.onReplace = { [weak self] in self?.replaceSelection() }
-    panel.onClose = { [weak self] in self?.dismissOverlay() }
+    panel.onReplace = { [weak self] in self?.session.replace() }
+    panel.onClose = { [weak self] in self?.session.dismiss() }
     panel.onOpenAccessibility = { TextCapture.openAccessibilitySettings() }
     panel.onRetry = { [weak self] in self?.retryLastTranslation() }
     guard isLive else { return }
-    TextCapture.startTrackingSelections()
+    TextCapture.startTrackingSelections { [weak self] event in
+      self?.isTranslateShortcut(event) ?? false
+    }
     installDefaultShortcuts()
     registerHotkeys()
   }
@@ -49,104 +60,13 @@ final class AppModel {
     translate(to: target)
   }
 
-  private var lastTarget: TranslationTarget?
+  /// Snapshots the engine settings now; changing them mid-translation affects the next one.
+  func translate(to target: TranslationTarget) {
+    session.translate(to: target, configuration: settings.engineConfiguration)
+  }
 
   func retryLastTranslation() {
-    guard let lastTarget else { return }
-    translate(to: lastTarget)
-  }
-
-  func translate(to target: TranslationTarget) {
-    lastTarget = target
-    translationGeneration += 1
-    let generation = translationGeneration
-    translationTask?.cancel()
-    overlay.copiedRecently = false
-    overlay.replacedRecently = false
-    // Read where the selection is before the panel exists on screen, while the
-    // source app still owns focus and the mouse is where the shortcut was pressed.
-    let anchor = invocationAnchor()
-    overlay.phase = .loading(target: target, source: "")
-    panel.presentUnfocused(anchor: anchor)
-
-    translationTask = Task { [weak self] in
-      guard let self else { return }
-
-      if !TextCapture.isTrusted {
-        TextCapture.promptForTrust()
-      }
-
-      let source = await TextCapture.selectedText()
-      guard generation == self.translationGeneration, !Task.isCancelled else { return }
-
-      if let source {
-        self.overlay.phase = .loading(target: target, source: source)
-        self.panel.relayout()
-
-        do {
-          let translator = Translator(
-            backend: self.settings.backend,
-            executableOverride: self.settings.activeExecutableOverride,
-            model: self.settings.activeModel,
-            useAppleOnDeviceModel: self.settings.useAppleOnDeviceModel
-          )
-          let translation = try await translator.translate(
-            text: source,
-            targetLanguage: target.language,
-            onOutput: { _ in },
-            onPartial: { [weak self, generation] partial in
-              await MainActor.run {
-                guard let self, generation == self.translationGeneration else { return }
-                self.overlay.showPartial(target: target, source: source, translation: partial)
-                self.panel.relayout(animated: true)
-              }
-            }
-          )
-          self.finish(
-            generation: generation,
-            phase: .result(target: target, source: source, translation: translation)
-          )
-        } catch is CancellationError {
-          return
-        } catch {
-          log.error("Translation failed: \(error.localizedDescription, privacy: .public)")
-          self.finish(
-            generation: generation,
-            phase: .error(message: error.localizedDescription, recovery: .openSettings)
-          )
-        }
-        return
-      }
-
-      if !TextCapture.isTrusted {
-        self.finish(
-          generation: generation,
-          phase: .error(
-            message: "macOS has not granted Accessibility to this copy of Translate yet. Turn Translate off and on in Accessibility, then click Try again.",
-            recovery: .openAccessibility
-          )
-        )
-        self.watchAccessibilityGrant(generation: generation)
-        return
-      }
-
-      self.finish(
-        generation: generation,
-        phase: .error(
-          message: "No text selected. Highlight something, then press the shortcut again.",
-          recovery: nil
-        )
-      )
-    }
-  }
-
-  func dismissOverlay() {
-    translationGeneration += 1
-    translationTask?.cancel()
-    overlay.copiedRecently = false
-    overlay.replacedRecently = false
-    overlay.phase = .hidden
-    panel.orderOut(nil)
+    session.retry(configuration: settings.engineConfiguration)
   }
 
   func copyTranslation() {
@@ -158,22 +78,6 @@ final class AppModel {
     Task {
       try? await Task.sleep(for: .seconds(1.4))
       overlay.copiedRecently = false
-    }
-  }
-
-  func replaceSelection() {
-    guard let translation = overlay.currentTranslation() else { return }
-    overlay.replacedRecently = true
-    overlay.copiedRecently = false
-    let original = overlay.capturedSource()
-    let generation = translationGeneration
-    Task {
-      _ = await TextCapture.replaceSelectedText(with: translation, matching: original)
-      await MainActor.run {
-        // A new shortcut press during the paste owns the overlay now; leave it open.
-        guard generation == self.translationGeneration else { return }
-        self.dismissOverlay()
-      }
     }
   }
 
@@ -239,9 +143,47 @@ final class AppModel {
     }
   }
 
+  private static func liveBoundaries() -> SessionBoundaries {
+    let clipboard = ClipboardTransactions.live()
+    let replacer = SelectionReplacer(
+      frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+      clipboard: clipboard
+    )
+    return SessionBoundaries(
+      anchor: invocationAnchor,
+      isTrusted: { TextCapture.isTrusted },
+      capture: {
+        if !TextCapture.isTrusted {
+          TextCapture.promptForTrust()
+        }
+        return try await TextCapture.capture(using: clipboard)
+      },
+      translate: { request, onPartial in
+        try await Translator(configuration: request.configuration).translate(
+          text: request.selection.text,
+          targetLanguage: request.target.language,
+          onOutput: { _ in },
+          onPartial: { partial in await onPartial(partial) }
+        )
+      },
+      replace: { selection, translation in
+        try await replacer.replace(selection, with: translation)
+      }
+    )
+  }
+
+  /// Offline: nothing is read from or written to other apps.
+  private static let inertBoundaries = SessionBoundaries(
+    anchor: { .point(.zero) },
+    isTrusted: { true },
+    capture: { .empty },
+    translate: { _, _ in throw CancellationError() },
+    replace: { _, _ in .failed(.selectionChanged) }
+  )
+
   /// Accessibility bounds first, the tracked mouse selection when the app hides them,
   /// and the pointer only when neither knows where the text is.
-  private func invocationAnchor() -> OverlayAnchor {
+  private static func invocationAnchor() -> OverlayAnchor {
     let screens = OverlayPanel.currentScreens()
     var accessibilityRect: CGRect?
     if TextCapture.isTrusted,
@@ -264,31 +206,9 @@ final class AppModel {
     return .point(NSEvent.mouseLocation)
   }
 
-  private func finish(generation: Int, phase: OverlayState.Phase) {
-    guard generation == translationGeneration else { return }
-    overlay.copiedRecently = false
-    overlay.replacedRecently = false
-    overlay.phase = phase
-    panel.relayout()
-  }
-
-  private func watchAccessibilityGrant(generation: Int) {
-    Task { [weak self] in
-      for _ in 0..<60 {
-        try? await Task.sleep(for: .milliseconds(500))
-        guard let self, generation == self.translationGeneration else { return }
-        if TextCapture.isTrusted {
-          self.finish(
-            generation: generation,
-            phase: .error(
-              message: "Accessibility is on. Select some text and press the shortcut again.",
-              recovery: nil
-            )
-          )
-          return
-        }
-      }
-    }
+  private func isTranslateShortcut(_ event: NSEvent) -> Bool {
+    guard let pressed = KeyboardShortcuts.Shortcut(event: event) else { return false }
+    return settings.targets.contains { KeyboardShortcuts.getShortcut(for: $0.shortcutName) == pressed }
   }
 
   private func installDefaultShortcuts() {
@@ -331,13 +251,10 @@ final class OverlayState {
     }
   }
 
-  func capturedSource() -> String? {
-    switch phase {
-    case .loading(_, let source), .streaming(_, let source, _), .result(_, let source, _):
-      return source.isEmpty ? nil : source
-    case .hidden, .error:
-      return nil
-    }
+  /// Only a finished translation can replace the selection; a partial one would cut it short.
+  var canReplace: Bool {
+    if case .result = phase { return true }
+    return false
   }
 
   func showPartial(target: TranslationTarget, source: String, translation: String) {

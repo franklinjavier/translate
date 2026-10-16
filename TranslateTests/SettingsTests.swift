@@ -8,10 +8,10 @@ private func makeTargets(_ count: Int) -> [TranslationTarget] {
   (0..<count).map { TranslationTarget(id: UUID(), label: "Label \($0)", language: "Language \($0)") }
 }
 
-private func makeSettings(_ targets: [TranslationTarget], backend: LLMBackend = .local) -> AppSettings {
+private func makeSettings(_ targets: [TranslationTarget], engine: TranslationEngine = .local) -> AppSettings {
   var settings = AppSettings.default
   settings.targets = targets
-  settings.backend = backend
+  settings.engine = engine
   return settings
 }
 
@@ -234,100 +234,6 @@ struct AppModelTargetTests {
     #expect(changed.label == "German")
     #expect(Array(model.settings.targets.prefix(2)) == targets)
   }
-
-  @Test func eachBackendUsesOnlyItsOwnModelAndPath() {
-    var settings = makeSettings(makeTargets(1))
-    settings.claudeModel = "opus"
-    settings.claudePath = "/opt/claude"
-    settings.codexModel = "gpt"
-    settings.codexPath = "/opt/codex"
-
-    settings.backend = .claude
-    #expect(settings.activeModel == "opus")
-    #expect(settings.activeExecutableOverride == "/opt/claude")
-    settings.backend = .codex
-    #expect(settings.activeModel == "gpt")
-    #expect(settings.activeExecutableOverride == "/opt/codex")
-    settings.backend = .local
-    #expect(settings.activeExecutableOverride.isEmpty)
-  }
-}
-
-struct EngineSelectionTests {
-  @Test func legacyFlagsProjectToOneEngine() {
-    var settings = makeSettings(makeTargets(1), backend: .codex)
-    #expect(settings.engine == .codex)
-    settings.useAppleOnDeviceModel = true
-    #expect(settings.engine == .apple, "the Apple flag wins over any saved backend")
-  }
-
-  @Test(arguments: [LLMBackend.local, .claude, .codex])
-  func choosingAppleKeepsTheBackendForLeavingIt(previous: LLMBackend) {
-    var settings = makeSettings(makeTargets(1), backend: previous)
-    settings.engine = .apple
-    #expect(settings.useAppleOnDeviceModel)
-    #expect(settings.backend == previous)
-    #expect(settings.engine == .apple)
-  }
-
-  @Test(arguments: [TranslationEngine.local, .claude, .codex])
-  func choosingAnOrdinaryEngineClearsAppleAndSetsTheBackend(engine: TranslationEngine) {
-    var settings = makeSettings(makeTargets(1), backend: .local)
-    settings.useAppleOnDeviceModel = true
-    settings.engine = engine
-    #expect(!settings.useAppleOnDeviceModel)
-    #expect(settings.backend == engine.backend)
-    #expect(settings.engine == engine)
-  }
-
-  @Test func savedFormatIsUnchanged() throws {
-    var settings = makeSettings(makeTargets(1), backend: .claude)
-    settings.engine = .apple
-    let data = try JSONEncoder().encode(settings)
-    let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    #expect(object["engine"] == nil)
-    #expect(object["backend"] as? String == "claude")
-    #expect(object["useAppleOnDeviceModel"] as? Bool == true)
-    let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
-    #expect(decoded.engine == .apple)
-    #expect(decoded.backend == .claude)
-  }
-}
-
-struct AppleEngineTests {
-  /// The Claude path doesn't exist, so a fallback would fail as executableNotFound (or spawn
-  /// whatever `claude` is on PATH). Apple must stop first, with its own error.
-  @Test func sameLanguageFailsWithoutFallingBackToACLI() async throws {
-    let translator = Translator(
-      backend: .claude,
-      executableOverride: "/nonexistent/translate-tests/claude",
-      model: "",
-      useAppleOnDeviceModel: true
-    )
-    do {
-      _ = try await translator.translate(
-        text: "This sentence is already written in plain English and only needs a proofread.",
-        targetLanguage: "english",
-        onOutput: { _ in },
-        onPartial: { _ in }
-      )
-      Issue.record("expected appleUnavailable")
-    } catch TranslatorError.appleUnavailable(let message) {
-      #expect(message == AppleTranslation.cannotProofreadMessage)
-    }
-  }
-
-  @Test func everyCatalogDestinationMapsToALocaleIdentifier() throws {
-    for language in TranslationLanguage.catalog {
-      let mapped = try #require(AppleLanguageMapper.language(from: language.target), "\(language.target)")
-      let code = try #require(mapped.languageCode?.identifier, "\(language.target)")
-      #expect((2...3).contains(code.count), "\(language.target) → \(code)")
-    }
-    #expect(AppleLanguageMapper.language(from: "European Portuguese")?.region?.identifier == "PT")
-    #expect(AppleLanguageMapper.language(from: "Brazilian Portuguese")?.region?.identifier == "BR")
-    #expect(AppleLanguageMapper.language(from: "Simplified Chinese")?.script?.identifier == "Hans")
-    #expect(AppleLanguageMapper.language(from: "Traditional Chinese")?.script?.identifier == "Hant")
-  }
 }
 
 /// The appearance a snapshot is forced into, independent of the system setting.
@@ -341,9 +247,9 @@ nonisolated enum SnapshotAppearance: String, CaseIterable, Sendable {
 }
 
 /// Renders the settings screen into a PNG without ordering a window on screen, so nothing takes
-/// focus. Each engine renders in light and dark, written as settings-<engine>-<appearance>.png.
-/// The path is printed; set SETTINGS_SNAPSHOT_DIR (TEST_RUNNER_SETTINGS_SNAPSHOT_DIR under
-/// xcodebuild) to write somewhere other than the temporary directory.
+/// focus. Each engine renders in light and dark, and the size and background assertions run every
+/// time. The PNG is written as settings-<engine>-<appearance>.png (and its path printed) only when
+/// SETTINGS_SNAPSHOT_DIR is set and non-empty (TEST_RUNNER_SETTINGS_SNAPSHOT_DIR under xcodebuild).
 struct SettingsSnapshotTests {
   @Test(arguments: TranslationEngine.allCases, SnapshotAppearance.allCases)
   func rendersOffscreen(engine: TranslationEngine, appearance: SnapshotAppearance) async throws {
@@ -377,9 +283,9 @@ struct SettingsSnapshotTests {
       }
     }
 
-    let directory = ProcessInfo.processInfo.environment["SETTINGS_SNAPSHOT_DIR"]
-      .map { URL(fileURLWithPath: $0) }
-      ?? FileManager.default.temporaryDirectory.appending(path: "TranslateSnapshots")
+    // Normal runs write nothing; only an explicit directory produces files.
+    guard let path = ProcessInfo.processInfo.environment["SETTINGS_SNAPSHOT_DIR"], !path.isEmpty else { return }
+    let directory = URL(fileURLWithPath: path)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let url = directory.appending(path: "settings-\(engine.rawValue)-\(appearance.rawValue).png")
     try png.write(to: url)

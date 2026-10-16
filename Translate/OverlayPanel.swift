@@ -204,10 +204,23 @@ final class OverlayPanel: NSPanel {
       onCopy?()
       return true
     case .replace:
-      guard state?.currentTranslation() != nil else { return false }
-      onReplace?()
+      guard let state, state.currentTranslation() != nil else { return false }
+      // While streaming Return is still taken, so it never lands in the source app.
+      if state.canReplace {
+        onReplace?()
+      }
       return true
     }
+  }
+}
+
+extension OverlayPanel: OverlayPresenter {
+  func present(anchor: OverlayAnchor) {
+    presentUnfocused(anchor: anchor)
+  }
+
+  func hide() {
+    orderOut(nil)
   }
 }
 

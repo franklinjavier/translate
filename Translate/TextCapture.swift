@@ -1,56 +1,95 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
-import os
-
-nonisolated private let captureLog = Logger(subsystem: "com.frank.translate", category: "capture")
 
 enum TextCapture {
-  private static let maxCharacters = 16_000
-  private static var replaceElement: AXUIElement?
-  private static var replaceApp: NSRunningApplication?
-
-  static func selectedText() async -> String? {
-    replaceElement = nil
-    replaceApp = NSWorkspace.shared.frontmostApplication
-    if let text = fromAccessibility(), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      return clip(text)
-    }
-    await waitForModifiersToClear()
-    return await fromClipboard()
+  /// The frontmost app's selection, with what replacing it later needs. Accessibility first;
+  /// otherwise a copy through the pasteboard, which stays there as if the user pressed ⌘C.
+  static func capture(using clipboard: ClipboardTransactions) async throws -> CaptureResult {
+    try await capture(
+      using: clipboard,
+      frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+      focusedElement: { focusedElement().map(AXSelectionElement.init) }
+    )
   }
 
-  static func replaceSelectedText(with text: String, matching original: String?) async -> Bool {
-    if let element = replaceElement {
-      if setSelectedText(element, to: text), valueContains(element, text, original: original) {
-        captureLog.info("replace via selectedText")
-        return true
-      }
-      if replaceValueRange(element, with: text), valueContains(element, text, original: original) {
-        captureLog.info("replace via selected range")
-        return true
-      }
-      if let original, replaceMatchingValue(element, original: original, replacement: text) {
-        captureLog.info("replace via matching value")
-        return true
-      }
+  /// `capture(using:)` with the frontmost app and focused element supplied by the caller.
+  static func capture(
+    using clipboard: ClipboardTransactions,
+    frontmostPID: () -> pid_t?,
+    focusedElement: () -> (any SelectionElement)?
+  ) async throws -> CaptureResult {
+    try Task.checkCancellation()
+    let pid = frontmostPID()
+    let element = focusedElement()
+    if let element, let text = element.selectedText, !isBlank(text) {
+      let range = element.selectedRange
+      return result(CapturedSelection(
+        text: text,
+        source: .accessibility,
+        appPID: pid,
+        element: element,
+        range: range,
+        value: range == nil ? nil : element.value
+      ))
+    }
+    guard pid != nil else { return .empty }
+
+    // Copy instead. Everything the copy is checked against is read now, before waiting:
+    // while modifiers are held or ⌘C is pending the user can select an identical phrase,
+    // edit the text, or switch field or app, and the capture must not follow them there.
+    // Some apps expose the range and value but not the selected text; keep them as identity.
+    let range = element?.selectedRange
+    let value = range == nil ? nil : element?.value
+    // With both readable, the copy must be exactly the text they select. Anything else on
+    // the pasteboard came from somewhere else.
+    var expected: String?
+    if let range, let value {
+      guard let selected = substring(of: value, in: range), !isBlank(selected) else { return .empty }
+      expected = selected
+    }
+    func isUnchanged() -> Bool {
+      guard frontmostPID() == pid else { return false }
+      guard let element else { return true }
+      return element.isFocused
+        && element.selectedRange == range
+        && (range == nil || element.value == value)
     }
 
-    await waitForModifiersToClear()
-    if let app = replaceApp {
-      app.activate()
-      try? await Task.sleep(for: .milliseconds(80))
-    }
+    guard
+      let text = try await clipboard.copySelection(isAppCurrent: isUnchanged),
+      !isBlank(text)
+    else { return .empty }
+    try Task.checkCancellation()
+    guard isUnchanged(), expected == nil || text == expected else { return .empty }
+    return result(CapturedSelection(
+      text: text,
+      source: .clipboard,
+      appPID: pid,
+      element: element,
+      range: range,
+      value: value
+    ))
+  }
 
-    let pasteboard = NSPasteboard.general
-    let savedItems = snapshot(pasteboard)
-    pasteboard.clearContents()
-    pasteboard.setString(text, forType: .string)
-    postCommandV()
-    try? await Task.sleep(for: .milliseconds(100))
-    restore(savedItems, onto: pasteboard)
-    captureLog.info("replace via paste")
-    return true
+  /// The UTF-16 `range` of `value`, or nil when it doesn't fit.
+  private static func substring(of value: String, in range: NSRange) -> String? {
+    let ns = value as NSString
+    guard
+      range.location >= 0,
+      range.length >= 0,
+      range.location <= ns.length,
+      range.length <= ns.length - range.location
+    else { return nil }
+    return ns.substring(with: range)
+  }
+
+  private static func result(_ selection: CapturedSelection) -> CaptureResult {
+    selection.text.count > CapturedSelection.maxCharacters ? .tooLong : .selection(selection)
+  }
+
+  private static func isBlank(_ text: String) -> Bool {
+    text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   /// Ancestors checked above the focused element. Browsers keep the page selection on the
@@ -68,7 +107,7 @@ enum TextCapture {
       if let rect = rangeBounds(current) ?? textMarkerBounds(current) {
         return rect
       }
-      if let role = attribute(current, kAXRoleAttribute) as? String,
+      if let role = copyAttribute(current, kAXRoleAttribute) as? String,
          role == kAXWindowRole || role == kAXApplicationRole {
         return nil
       }
@@ -85,8 +124,10 @@ enum TextCapture {
 
   /// Watches mouse selections in other apps from launch, so the first shortcut press already
   /// knows where a drag-selected passage sits even if the pointer has since moved away.
-  static func startTrackingSelections() {
+  /// `isTranslateShortcut` recognizes the app's own shortcuts, which leave the selection alone.
+  static func startTrackingSelections(isTranslateShortcut: @escaping (NSEvent) -> Bool) {
     guard dragMonitor == nil else { return }
+    translateShortcut = isTranslateShortcut
     dragMonitor = NSEvent.addGlobalMonitorForEvents(
       matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel, .keyDown]
     ) { event in
@@ -94,8 +135,11 @@ enum TextCapture {
     }
   }
 
+  static var isTrackingSelections: Bool { dragMonitor != nil }
+
   private static var dragTracker = DragSelectionTracker()
   private static var dragMonitor: Any?
+  private static var translateShortcut: (NSEvent) -> Bool = { _ in false }
 
   private static func handleTracked(_ event: NSEvent) {
     let point = NSEvent.mouseLocation
@@ -117,11 +161,14 @@ enum TextCapture {
       // The text moved under the remembered rect.
       dragTracker.invalidate()
     case .keyDown:
-      let flags = event.modifierFlags
+      let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
       if DragSelectionTracker.keyChangesSelection(
         keyCode: Int(event.keyCode),
         command: flags.contains(.command),
-        control: flags.contains(.control)
+        option: flags.contains(.option),
+        control: flags.contains(.control),
+        shift: flags.contains(.shift),
+        isTranslateShortcut: translateShortcut(event)
       ) {
         dragTracker.invalidate()
       }
@@ -139,7 +186,7 @@ enum TextCapture {
     return pid.int32Value
   }
 
-  private static func focusedElement() -> AXUIElement? {
+  static func focusedElement() -> AXUIElement? {
     if let element = elementAttribute(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute) {
       return element
     }
@@ -155,7 +202,7 @@ enum TextCapture {
   /// Native text views: AXSelectedTextRange plus AXBoundsForRange.
   private static func rangeBounds(_ element: AXUIElement) -> CGRect? {
     guard
-      let rangeRef = attribute(element, kAXSelectedTextRangeAttribute),
+      let rangeRef = copyAttribute(element, kAXSelectedTextRangeAttribute),
       CFGetTypeID(rangeRef) == AXValueGetTypeID()
     else { return nil }
     var range = CFRange()
@@ -172,7 +219,7 @@ enum TextCapture {
   /// Both return one rect covering every line of the range.
   private static func textMarkerBounds(_ element: AXUIElement) -> CGRect? {
     guard
-      let markerRange = attribute(element, "AXSelectedTextMarkerRange"),
+      let markerRange = copyAttribute(element, "AXSelectedTextMarkerRange"),
       let bounds = rect(from: parameterizedAttribute(element, "AXBoundsForTextMarkerRange", markerRange)),
       // A collapsed range is the caret, not a selection.
       bounds.width > 1
@@ -180,14 +227,14 @@ enum TextCapture {
     return SelectionGeometry.union([bounds])
   }
 
-  private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+  static func copyAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
     return value
   }
 
   private static func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
-    guard let value = attribute(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    guard let value = copyAttribute(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
     return (value as! AXUIElement)
   }
 
@@ -226,189 +273,45 @@ enum TextCapture {
       NSWorkspace.shared.open(url)
     }
   }
+}
 
-  private static func setSelectedText(_ element: AXUIElement, to text: String) -> Bool {
-    AXUIElementSetAttributeValue(
-      element,
-      kAXSelectedTextAttribute as CFString,
-      text as CFTypeRef
-    ) == .success
+/// A focused Accessibility element read and written as a `SelectionElement`.
+final class AXSelectionElement: SelectionElement {
+  private let element: AXUIElement
+
+  init(_ element: AXUIElement) {
+    self.element = element
   }
 
-  private static func replaceValueRange(_ element: AXUIElement, with text: String) -> Bool {
-    var rangeRef: CFTypeRef?
-    var valueRef: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        element,
-        kAXSelectedTextRangeAttribute as CFString,
-        &rangeRef
-      ) == .success,
-      let rangeRef,
-      CFGetTypeID(rangeRef) == AXValueGetTypeID()
-    else { return false }
-
-    var range = CFRange()
-    guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) else { return false }
-    guard
-      AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-      let current = valueRef as? String,
-      let next = SelectedTextSplicer.splice(
-        value: current,
-        utf16Location: Int(range.location),
-        utf16Length: Int(range.length),
-        insertion: text
-      )
-    else { return false }
-
-    return AXUIElementSetAttributeValue(
-      element,
-      kAXValueAttribute as CFString,
-      next as CFTypeRef
-    ) == .success
+  var selectedText: String? {
+    TextCapture.copyAttribute(element, kAXSelectedTextAttribute) as? String
   }
 
-  private static func replaceMatchingValue(
-    _ element: AXUIElement,
-    original: String,
-    replacement: String
-  ) -> Bool {
+  var selectedRange: NSRange? {
     guard
-      let current = readValue(element),
-      let next = SelectedTextSplicer.replacingFirstOccurrence(
-        of: original,
-        in: current,
-        with: replacement
-      )
-    else { return false }
-    let status = AXUIElementSetAttributeValue(
-      element,
-      kAXValueAttribute as CFString,
-      next as CFTypeRef
-    )
-    return status == .success && valueContains(element, replacement, original: original)
-  }
-
-  private static func readValue(_ element: AXUIElement) -> String? {
-    var valueRef: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success
+      let value = TextCapture.copyAttribute(element, kAXSelectedTextRangeAttribute),
+      CFGetTypeID(value) == AXValueGetTypeID()
     else { return nil }
-    return valueRef as? String
+    var range = CFRange()
+    guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
+    return NSRange(location: range.location, length: range.length)
   }
 
-  private static func valueContains(_ element: AXUIElement, _ replacement: String, original: String?) -> Bool {
-    guard let value = readValue(element), value.contains(replacement) else { return false }
-    guard let original, original != replacement else { return true }
-    return !value.contains(original)
+  var value: String? {
+    TextCapture.copyAttribute(element, kAXValueAttribute) as? String
   }
 
-  private static func fromAccessibility() -> String? {
-    let systemWide = AXUIElementCreateSystemWide()
-    var focused: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(
-      systemWide,
-      kAXFocusedUIElementAttribute as CFString,
-      &focused
-    ) == .success, let focused else {
-      return nil
-    }
-
-    let element = focused as! AXUIElement
-    replaceElement = element
-    var selected: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(
-      element,
-      kAXSelectedTextAttribute as CFString,
-      &selected
-    ) == .success else {
-      return nil
-    }
-    return selected as? String
+  var isFocused: Bool {
+    guard let focused = TextCapture.focusedElement() else { return false }
+    return CFEqual(focused, element)
   }
 
-  private static func fromClipboard() async -> String? {
-    let pasteboard = NSPasteboard.general
-    let savedItems = snapshot(pasteboard)
-    let changeCount = pasteboard.changeCount
-
-    postCommandC()
-
-    var changed = pasteboard.changeCount != changeCount
-    if !changed {
-      for _ in 0..<12 {
-        try? await Task.sleep(for: .milliseconds(8))
-        if pasteboard.changeCount != changeCount {
-          changed = true
-          break
-        }
-      }
-    }
-
-    let text = changed ? pasteboard.string(forType: .string) : nil
-    restore(savedItems, onto: pasteboard)
-
-    guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      return nil
-    }
-    return clip(text)
+  func setSelectedText(_ text: String) -> Bool {
+    AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success
   }
 
-  private static func waitForModifiersToClear() async {
-    for _ in 0..<20 {
-      let held = NSEvent.modifierFlags.intersection([.command, .option, .control, .shift])
-      if held.isEmpty { return }
-      try? await Task.sleep(for: .milliseconds(8))
-    }
-  }
-
-  private static func postCommandC() {
-    let source = CGEventSource(stateID: .hidSystemState)
-    source?.localEventsSuppressionInterval = 0
-    let keyCode = CGKeyCode(kVK_ANSI_C)
-    let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-    down?.flags = .maskCommand
-    let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-    up?.flags = .maskCommand
-    down?.post(tap: .cghidEventTap)
-    up?.post(tap: .cghidEventTap)
-  }
-
-  private static func postCommandV() {
-    let source = CGEventSource(stateID: .hidSystemState)
-    source?.localEventsSuppressionInterval = 0
-    let keyCode = CGKeyCode(kVK_ANSI_V)
-    let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-    down?.flags = .maskCommand
-    let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-    up?.flags = .maskCommand
-    down?.post(tap: .cghidEventTap)
-    up?.post(tap: .cghidEventTap)
-  }
-
-  private static func snapshot(_ pasteboard: NSPasteboard) -> [NSPasteboardItem] {
-    guard let items = pasteboard.pasteboardItems else { return [] }
-    return items.map { item in
-      let clone = NSPasteboardItem()
-      for type in item.types {
-        if let data = item.data(forType: type) {
-          clone.setData(data, forType: type)
-        }
-      }
-      return clone
-    }
-  }
-
-  private static func restore(_ items: [NSPasteboardItem], onto pasteboard: NSPasteboard) {
-    pasteboard.clearContents()
-    if !items.isEmpty {
-      pasteboard.writeObjects(items)
-    }
-  }
-
-  private static func clip(_ text: String) -> String {
-    guard text.count > maxCharacters else { return text }
-    return String(text.prefix(maxCharacters))
+  func setValue(_ value: String) -> Bool {
+    AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef) == .success
   }
 }
 
@@ -509,11 +412,20 @@ nonisolated struct DragSelectionTracker {
     return rect
   }
 
-  /// Typing, plain or shift arrows, and Select All change the selection without the mouse.
-  /// Other Command and Control shortcuts (Copy, the translate hotkey) leave it alone.
-  static func keyChangesSelection(keyCode: Int, command: Bool, control: Bool) -> Bool {
-    if command { return keyCode == kVK_ANSI_A }
-    return !control
+  /// Almost any key can move the caret or edit the text: typing, arrows with any modifier,
+  /// ⌘A, ⌘V, ⌘Z, Control-key bindings. So every press forgets the drag except the two known
+  /// to leave the selection where it was: plain ⌘C and the app's own translate shortcuts.
+  static func keyChangesSelection(
+    keyCode: Int,
+    command: Bool,
+    option: Bool,
+    control: Bool,
+    shift: Bool,
+    isTranslateShortcut: Bool
+  ) -> Bool {
+    if isTranslateShortcut { return false }
+    let plainCommand = command && !option && !control && !shift
+    return !(plainCommand && keyCode == kVK_ANSI_C)
   }
 
   static func span(_ a: CGPoint, _ b: CGPoint) -> CGRect {
@@ -523,31 +435,5 @@ nonisolated struct DragSelectionTracker {
       width: abs(a.x - b.x),
       height: abs(a.y - b.y) + lineAllowance * 2
     )
-  }
-}
-
-nonisolated enum SelectedTextSplicer {
-  static func splice(
-    value: String,
-    utf16Location: Int,
-    utf16Length: Int,
-    insertion: String
-  ) -> String? {
-    let ns = value as NSString
-    guard
-      utf16Location >= 0,
-      utf16Length >= 0,
-      utf16Location <= ns.length,
-      utf16Location + utf16Length <= ns.length
-    else { return nil }
-    return ns.replacingCharacters(
-      in: NSRange(location: utf16Location, length: utf16Length),
-      with: insertion
-    )
-  }
-
-  static func replacingFirstOccurrence(of original: String, in value: String, with insertion: String) -> String? {
-    guard let range = value.range(of: original) else { return nil }
-    return value.replacingCharacters(in: range, with: insertion)
   }
 }

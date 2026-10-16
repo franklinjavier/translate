@@ -6,7 +6,7 @@ It does not show that quality matches any other product, Raycast AI included.
 
 ## What runs
 
-`LiveTranslationEvalTests` in `TranslateTests/PromptBuilderTests.swift` sends each case through the real `Translator`:
+`LiveTranslationEvalTests` in `TranslateTests/LiveTranslationEvalTests.swift` (cases in `TranslateTests/LiveEvalCases.swift`) sends each case through the real `Translator`:
 the real `PromptBuilder` prompts, the real `OutputSanitizer`, and the default engine from `AppSettings.default`.
 Today that's Local MLX at `127.0.0.1:8765` with `LocalMLX.defaultModel`.
 Nothing is mocked.

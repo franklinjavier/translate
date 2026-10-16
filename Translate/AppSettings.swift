@@ -1,33 +1,9 @@
 import Foundation
 import KeyboardShortcuts
 
-nonisolated enum LLMBackend: String, Codable, CaseIterable, Identifiable, Sendable {
-  case local
-  case claude
-  case codex
-
-  var id: String { rawValue }
-
-  var title: String {
-    switch self {
-    case .local: "Local"
-    case .claude: "Claude"
-    case .codex: "Codex"
-    }
-  }
-
-  var defaultExecutableName: String {
-    switch self {
-    case .local: ""
-    case .claude: "claude"
-    case .codex: "codex"
-    }
-  }
-}
-
-/// What the settings picker shows. Not saved itself: it projects `backend` and
-/// `useAppleOnDeviceModel`, so the stored format stays as it was.
-nonisolated enum TranslationEngine: String, CaseIterable, Identifiable, Sendable {
+/// The one engine translations run on. Saved as `engine`; older settings stored a CLI
+/// backend plus an Apple flag that overrode it, and decode into this.
+nonisolated enum TranslationEngine: String, Codable, CaseIterable, Identifiable, Sendable {
   case local
   case apple
   case claude
@@ -44,12 +20,12 @@ nonisolated enum TranslationEngine: String, CaseIterable, Identifiable, Sendable
     }
   }
 
-  var backend: LLMBackend? {
+  /// The CLI's name on PATH, for the engines that run one.
+  var executableName: String {
     switch self {
-    case .local: .local
-    case .apple: nil
-    case .claude: .claude
-    case .codex: .codex
+    case .local, .apple: ""
+    case .claude: "claude"
+    case .codex: "codex"
     }
   }
 }
@@ -156,56 +132,73 @@ struct TranslationTarget: Codable, Equatable, Identifiable, Hashable {
 }
 
 struct AppSettings: Codable, Equatable {
-  var backend: LLMBackend
+  var engine: TranslationEngine {
+    didSet {
+      if engine != .apple { previousEngine = engine }
+    }
+  }
+  /// The last engine other than Apple, restored when the menu turns Apple Translate off.
+  private(set) var previousEngine: TranslationEngine
   var claudePath: String
   var claudeModel: String
   var codexPath: String
   var codexModel: String
   var targets: [TranslationTarget]
   var launchAtLogin: Bool
-  var useAppleOnDeviceModel: Bool
 
   static let defaultsKey = "appSettings"
 
   static let `default` = AppSettings(
-    backend: .local,
+    engine: .local,
     claudePath: "",
     claudeModel: "",
     codexPath: "",
     codexModel: "",
     targets: [.english, .portuguese],
-    launchAtLogin: false,
-    useAppleOnDeviceModel: false
+    launchAtLogin: false
   )
 
   init(
-    backend: LLMBackend,
+    engine: TranslationEngine,
+    previousEngine: TranslationEngine = .local,
     claudePath: String,
     claudeModel: String,
     codexPath: String,
     codexModel: String,
     targets: [TranslationTarget],
-    launchAtLogin: Bool,
-    useAppleOnDeviceModel: Bool
+    launchAtLogin: Bool
   ) {
-    self.backend = backend
+    self.engine = engine
+    self.previousEngine = engine == .apple ? Self.restorable(previousEngine) : engine
     self.claudePath = claudePath
     self.claudeModel = claudeModel
     self.codexPath = codexPath
     self.codexModel = codexModel
     self.targets = targets
     self.launchAtLogin = launchAtLogin
-    self.useAppleOnDeviceModel = useAppleOnDeviceModel
   }
 
   enum CodingKeys: String, CodingKey {
-    case backend, claudePath, claudeModel, codexPath, codexModel
-    case targets, launchAtLogin, useAppleOnDeviceModel
+    case engine, previousEngine, claudePath, claudeModel, codexPath, codexModel
+    case targets, launchAtLogin
+    /// Read from settings saved before `engine` existed; never written.
+    case backend, useAppleOnDeviceModel
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    backend = try container.decodeIfPresent(LLMBackend.self, forKey: .backend) ?? .claude
+    if let engine = try container.decodeIfPresent(TranslationEngine.self, forKey: .engine) {
+      self.engine = engine
+      let previous = try container.decodeIfPresent(TranslationEngine.self, forKey: .previousEngine)
+      previousEngine = engine == .apple ? Self.restorable(previous ?? .local) : engine
+    } else {
+      // Legacy: a CLI backend (Claude when missing) that the Apple flag overrode while on.
+      let backend = try container.decodeIfPresent(String.self, forKey: .backend)
+        .flatMap(TranslationEngine.init(rawValue:)) ?? .claude
+      let apple = try container.decodeIfPresent(Bool.self, forKey: .useAppleOnDeviceModel) ?? false
+      engine = apple ? .apple : Self.restorable(backend)
+      previousEngine = Self.restorable(backend)
+    }
     claudePath = try container.decodeIfPresent(String.self, forKey: .claudePath) ?? ""
     claudeModel = try container.decodeIfPresent(String.self, forKey: .claudeModel) ?? ""
     codexPath = try container.decodeIfPresent(String.self, forKey: .codexPath) ?? ""
@@ -213,44 +206,36 @@ struct AppSettings: Codable, Equatable {
     targets = try container.decodeIfPresent([TranslationTarget].self, forKey: .targets)
       ?? [.english, .portuguese]
     launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
-    useAppleOnDeviceModel = try container.decodeIfPresent(Bool.self, forKey: .useAppleOnDeviceModel)
-      ?? false
   }
 
-  /// Apple wins while its flag is on. Choosing Apple leaves `backend` alone, so leaving Apple
-  /// later can restore it; choosing any other engine turns the flag off and sets the backend.
-  var engine: TranslationEngine {
-    get {
-      if useAppleOnDeviceModel { return .apple }
-      switch backend {
-      case .local: return .local
-      case .claude: return .claude
-      case .codex: return .codex
-      }
-    }
-    set {
-      if let backend = newValue.backend {
-        self.backend = backend
-        useAppleOnDeviceModel = false
-      } else {
-        useAppleOnDeviceModel = true
-      }
-    }
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(engine, forKey: .engine)
+    try container.encode(previousEngine, forKey: .previousEngine)
+    try container.encode(claudePath, forKey: .claudePath)
+    try container.encode(claudeModel, forKey: .claudeModel)
+    try container.encode(codexPath, forKey: .codexPath)
+    try container.encode(codexModel, forKey: .codexModel)
+    try container.encode(targets, forKey: .targets)
+    try container.encode(launchAtLogin, forKey: .launchAtLogin)
   }
 
-  var activeExecutableOverride: String {
-    switch backend {
-    case .local: ""
-    case .claude: claudePath
-    case .codex: codexPath
-    }
+  private static func restorable(_ engine: TranslationEngine) -> TranslationEngine {
+    engine == .apple ? .local : engine
   }
 
-  var activeModel: String {
-    switch backend {
-    case .local: LocalMLX.defaultModel
-    case .claude: claudeModel
-    case .codex: codexModel
+  /// The menu's Apple toggle: on, or back to the engine used before it.
+  mutating func toggleApple() {
+    engine = engine == .apple ? previousEngine : .apple
+  }
+
+  /// What a translation started now would run with.
+  var engineConfiguration: EngineConfiguration {
+    switch engine {
+    case .local: EngineConfiguration(engine: .local, executableOverride: "", model: LocalMLX.defaultModel)
+    case .apple: EngineConfiguration(engine: .apple, executableOverride: "", model: "")
+    case .claude: EngineConfiguration(engine: .claude, executableOverride: claudePath, model: claudeModel)
+    case .codex: EngineConfiguration(engine: .codex, executableOverride: codexPath, model: codexModel)
     }
   }
 
@@ -303,8 +288,7 @@ struct AppSettings: Codable, Equatable {
       return .default
     }
     if UserDefaults.standard.object(forKey: "didSelectLocalEngine") == nil {
-      settings.backend = .local
-      settings.useAppleOnDeviceModel = false
+      settings.engine = .local
       settings.save()
       UserDefaults.standard.set(true, forKey: "didSelectLocalEngine")
     }

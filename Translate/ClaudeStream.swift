@@ -10,6 +10,8 @@ nonisolated struct ClaudeStreamParser: Sendable {
   private(set) var streamed = ""
   private(set) var resultText: String?
   private(set) var deltaCount = 0
+  /// The CLI's final result was an error report (auth, quota…), so its text isn't a translation.
+  private(set) var resultIsError = false
 
   var finalText: String {
     let text = resultText ?? streamed
@@ -54,13 +56,11 @@ nonisolated struct ClaudeStreamParser: Sendable {
         deltaCount += 1
         streamed += text
         pulse.displayed = streamed
-        pulse.traces.append(
-          "delta #\(deltaCount) +\(text.count) total=\(streamed.count) \(Self.preview(text))"
-        )
+        pulse.traces.append("delta #\(deltaCount) +\(text.count) total=\(streamed.count)")
         return
       }
       if let inner = (object["event"] as? [String: Any])?["type"] as? String {
-        note("stream_event/\(inner)", into: &pulse)
+        note("stream_event/\(Self.knownEvents.contains(inner) ? inner : "other")", into: &pulse)
       }
     case "assistant":
       guard streamed.isEmpty, let text = Self.assistantText(in: object), !text.isEmpty else {
@@ -71,22 +71,23 @@ nonisolated struct ClaudeStreamParser: Sendable {
       pulse.displayed = streamed
       pulse.traces.append("assistant \(text.count) chars")
     case "result":
-      if let error = object["error"] as? String, !error.isEmpty {
-        pulse.traces.append("result error \(error)")
+      if object["is_error"] as? Bool == true {
+        resultIsError = true
+        pulse.traces.append("result is_error")
       }
       guard let text = object["result"] as? String else {
         pulse.traces.append("result (no text)")
         return
       }
       resultText = text
-      if streamed.isEmpty {
+      if streamed.isEmpty, !resultIsError {
         streamed = text
         pulse.displayed = streamed
       }
       pulse.traces.append("result \(text.count) chars")
     default:
-      let subtype = object["subtype"] as? String
-      note(subtype.map { "\(type)/\($0)" } ?? type, into: &pulse)
+      // Event names are the CLI's own vocabulary; anything else is noted as unknown.
+      note(Self.knownTypes.contains(type) ? type : "other", into: &pulse)
     }
   }
 
@@ -125,13 +126,10 @@ nonisolated struct ClaudeStreamParser: Sendable {
     return joined.isEmpty ? nil : joined
   }
 
-  private static func preview(_ text: String, limit: Int = 40) -> String {
-    let collapsed = text
-      .replacingOccurrences(of: "\n", with: "\\n")
-      .replacingOccurrences(of: "\t", with: "\\t")
-    if collapsed.count <= limit {
-      return "“\(collapsed)”"
-    }
-    return "“\(collapsed.prefix(limit))…”"
-  }
+  // Traces name only the CLI's own event vocabulary, so nothing read from stdout reaches a log.
+  private static let knownTypes: Set<String> = ["system", "user", "rate_limit_event"]
+  private static let knownEvents: Set<String> = [
+    "message_start", "content_block_start", "content_block_delta", "content_block_stop",
+    "message_delta", "message_stop",
+  ]
 }

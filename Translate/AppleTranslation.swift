@@ -62,7 +62,7 @@ nonisolated enum AppleTranslation {
     await trace("Apple Translate (TranslationSession)")
 
     guard let target = AppleLanguageMapper.language(from: targetLanguage) else {
-      await trace("unmapped target “\(targetLanguage)”")
+      await trace("unmapped target")
       throw TranslatorError.appleUnavailable(
         "Don’t know how to map “\(targetLanguage)” to an Apple language."
       )
@@ -121,7 +121,7 @@ nonisolated enum AppleTranslation {
         "Download this language pair in the Translate app, then try again."
       )
     } catch {
-      await trace("error: \(error.localizedDescription)")
+      await trace("error \(String(describing: type(of: error)))")
       throw error
     }
   }

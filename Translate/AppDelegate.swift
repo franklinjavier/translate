@@ -2,21 +2,34 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-  let model = AppModel()
+  /// Test runs host the app. There it keeps default settings in memory and installs nothing
+  /// global: no shortcuts, selection tracker, status item or settings window.
+  static let isHostingTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
-  private var statusItem: NSStatusItem?
+  /// SwiftUI's adaptor installs its own `NSApp.delegate` and forwards to this instance.
+  private(set) static weak var current: AppDelegate?
+
+  let model = isHostingTests ? AppModel(settings: .default, isLive: false) : AppModel()
+
+  override init() {
+    super.init()
+    Self.current = self
+  }
+
+  private(set) var statusItem: NSStatusItem?
   private var settingsWindow: NSWindow?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    guard !Self.isHostingTests else { return }
     setupStatusItem()
     observeSettingsClose()
-    // Test runs host the app; popping the window there would steal focus.
-    if !isLaunchedAtLogin() && !isRunningTests() {
+    if !isLaunchedAtLogin() {
       openSettings()
     }
   }
 
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    guard !Self.isHostingTests else { return false }
     openSettings()
     return true
   }
@@ -30,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       keyEquivalent: ""
     )
     localItem.target = self
-    localItem.state = (!model.settings.useAppleOnDeviceModel && model.settings.backend == .local) ? .on : .off
+    localItem.state = model.settings.engine == .local ? .on : .off
     localItem.toolTip = "Qwen3-4B on 127.0.0.1:8765, streamed"
     menu.addItem(localItem)
 
@@ -40,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       keyEquivalent: ""
     )
     appleItem.target = self
-    appleItem.state = model.settings.useAppleOnDeviceModel ? .on : .off
+    appleItem.state = model.settings.engine == .apple ? .on : .off
     appleItem.toolTip = AppleTranslation.availabilitySummary
     menu.addItem(appleItem)
 
@@ -67,12 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   @objc func useLocalEngine() {
-    model.settings.useAppleOnDeviceModel = false
-    model.settings.backend = .local
+    model.settings.engine = .local
   }
 
   @objc func toggleAppleOnDeviceModel() {
-    model.settings.useAppleOnDeviceModel.toggle()
+    model.settings.toggleApple()
   }
 
   @objc func openSettingsClicked() {
@@ -151,10 +163,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.delegate = self
     item.menu = menu
     statusItem = item
-  }
-
-  private func isRunningTests() -> Bool {
-    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
   }
 
   private func isLaunchedAtLogin() -> Bool {
