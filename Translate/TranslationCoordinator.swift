@@ -235,6 +235,8 @@ final class TranslationCoordinator {
       "Not replaced: the app with the selection is no longer in front. Copy the translation instead."
     case .selectionChanged:
       "Not replaced: the selection changed after it was translated. Select the text and translate again."
+    case .notApplied:
+      "Not replaced: this field didn't accept the paste. Try an editable text field."
     }
   }
 }

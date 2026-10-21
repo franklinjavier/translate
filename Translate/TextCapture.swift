@@ -275,7 +275,7 @@ enum TextCapture {
   }
 }
 
-/// A focused Accessibility element read and written as a `SelectionElement`.
+/// A focused Accessibility element read as a `SelectionElement`.
 final class AXSelectionElement: SelectionElement {
   private let element: AXUIElement
 
@@ -304,14 +304,6 @@ final class AXSelectionElement: SelectionElement {
   var isFocused: Bool {
     guard let focused = TextCapture.focusedElement() else { return false }
     return CFEqual(focused, element)
-  }
-
-  func setSelectedText(_ text: String) -> Bool {
-    AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success
-  }
-
-  func setValue(_ value: String) -> Bool {
-    AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef) == .success
   }
 }
 

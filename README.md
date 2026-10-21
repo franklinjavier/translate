@@ -67,9 +67,10 @@ Translate reads the selection through Accessibility when the app exposes it.
 Otherwise it copies the selection with ⌘C, and the source text stays on the clipboard as if you had copied it.
 If the app, field or selection changes while copying, or the copy doesn't match the selection the app reports, nothing is translated.
 
-Replacing writes through Accessibility when it can, which leaves the clipboard alone.
-Otherwise it pastes with ⌘V.
+Replacing always pastes the translation once with ⌘V, after checking that the app, field and selection are still the ones you translated.
+Accessibility writes are not used, because some apps report success without changing anything.
 Your previous clipboard comes back only after Accessibility confirms the pasted text; when nothing can confirm it, the translation stays on the clipboard.
+If the app still shows the original text after the paste, Translate reports that the replacement failed instead of closing silently.
 
 ## Build
 

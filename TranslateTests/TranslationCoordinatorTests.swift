@@ -241,6 +241,20 @@ struct TranslationCoordinatorTests {
     try await eventually { harness.replacements[0].pending.sawCancellation }
     #expect(harness.overlay.phase == .loading(target: CoordinatorHarness.portuguese, source: ""))
   }
+
+  @Test func ignoredPasteShowsAnErrorWithoutHidingOrRetrying() async throws {
+    defer { harness.tearDown() }
+    try await harness.finishedResult()
+    harness.coordinator.replace()
+    try await eventually { harness.replacements.count == 1 }
+    harness.replacements[0].pending.resume(.failed(.notApplied))
+    try await eventually {
+      harness.overlay.phase == .error(message: TranslationCoordinator.message(for: .notApplied), recovery: nil)
+    }
+    harness.coordinator.replace()
+    #expect(harness.replacements.count == 1)
+    #expect(harness.presenter.hidden == 0)
+  }
 }
 
 struct AppModelRequestTests {

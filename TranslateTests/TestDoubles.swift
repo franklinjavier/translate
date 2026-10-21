@@ -2,8 +2,7 @@ import AppKit
 import Foundation
 @testable import Translate
 
-/// An editor held in memory: a value, a UTF-16 selection, and switches for how a real app
-/// may treat Accessibility writes.
+/// An editor held in memory with a UTF-16 selection and configurable Accessibility reads.
 final class FakeEditor: SelectionElement {
   var text: String
   var selection: NSRange
@@ -12,13 +11,8 @@ final class FakeEditor: SelectionElement {
   /// False models an app that reports range and value but not the selected text, so a
   /// capture has to copy it through the pasteboard.
   var exposesSelectedText = true
-  var acceptsSelectedText = true
-  /// Reports success for a selected-text write but changes nothing, like some web views.
-  var ignoresAcceptedSelectedText = false
-  var acceptsValue = true
   /// False once the user moves focus to another field.
   var isFocused = true
-  private(set) var writes: [String] = []
 
   init(_ text: String, selecting substring: String, occurrence: Int = 1) {
     self.text = text
@@ -36,24 +30,7 @@ final class FakeEditor: SelectionElement {
   var selectedRange: NSRange? { exposesRange ? selection : nil }
   var value: String? { exposesValue ? text : nil }
 
-  func setSelectedText(_ replacement: String) -> Bool {
-    writes.append("selectedText")
-    guard acceptsSelectedText else { return false }
-    if !ignoresAcceptedSelectedText {
-      insert(replacement)
-    }
-    return true
-  }
-
-  func setValue(_ value: String) -> Bool {
-    writes.append("value")
-    guard acceptsValue else { return false }
-    text = value
-    selection = NSRange(location: 0, length: 0)
-    return true
-  }
-
-  /// What a real app does on paste or a selected-text write: replace the selection, caret after.
+  /// What a real app does on paste: replace the selection, caret after.
   func insert(_ replacement: String) {
     text = (text as NSString).replacingCharacters(in: selection, with: replacement)
     selection = NSRange(location: selection.location + (replacement as NSString).length, length: 0)

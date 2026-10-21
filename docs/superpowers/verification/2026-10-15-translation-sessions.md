@@ -1,5 +1,7 @@
 # Translation session verification
 
+> Historical record. It describes the Accessibility-write replacement used at the time; replacement now uses one validated native paste (see README, Clipboard).
+
 Baseline: `8e38bcb`. Work branch: `codex/harden-translation-sessions`.
 Claude Code implemented the changes; Codex reviewed the source and independently executed the checks below.
 
