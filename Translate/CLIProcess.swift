@@ -2,12 +2,14 @@ import Darwin
 import Foundation
 
 /// What to run. Stdout is a pseudo-terminal when the CLI only streams to a TTY (Claude).
+/// Stdin is empty unless `stdin` gives the complete input, which the child reads to EOF.
 nonisolated struct CLICommand: Sendable {
   var executable: String
   var arguments: [String]
   var environment: [String: String]
   var currentDirectory: String
   var stdoutIsTerminal = false
+  var stdin: Data?
 }
 
 nonisolated struct CLIExit: Sendable, Equatable {
@@ -26,6 +28,8 @@ nonisolated enum CLIProcess {
   /// grandchild that inherited stdout. The process group is killed after that.
   static let drainGrace: DispatchTimeInterval = .milliseconds(400)
   static let stderrLimit = 8_192
+  /// Input is a short request written before launch, never a stream.
+  static let stdinLimit = 64 * 1024
 
   /// Runs `command` to completion and hands decoded stdout to `onStdout` in order.
   /// Returns only after the process is reaped and every descriptor is closed. Cancellation
@@ -109,18 +113,26 @@ nonisolated private final class ChildProcess: @unchecked Sendable {
 
   init(_ command: CLICommand) throws {
     (events, continuation) = AsyncStream<Event>.makeStream()
-    let stdout = try command.stdoutIsTerminal ? PseudoTerminal.open() : Self.pipe()
+    let stdin = try command.stdin.map(Self.inputFile)
+    let stdout: (read: Int32, write: Int32)
     let stderr: (read: Int32, write: Int32)
     do {
-      stderr = try Self.pipe()
+      stdout = try command.stdoutIsTerminal ? PseudoTerminal.open() : Self.pipe()
+      do {
+        stderr = try Self.pipe()
+      } catch {
+        close(stdout.read)
+        close(stdout.write)
+        throw error
+      }
     } catch {
-      close(stdout.read)
-      close(stdout.write)
+      if let stdin { close(stdin) }
       throw error
     }
 
-    let spawned = Self.spawn(command, stdout: stdout.write, stderr: stderr.write)
+    let spawned = Self.spawn(command, stdin: stdin, stdout: stdout.write, stderr: stderr.write)
     // The child has its own copies now, or failed to start.
+    if let stdin { close(stdin) }
     close(stdout.write)
     close(stderr.write)
     guard case .success(let pid) = spawned else {
@@ -273,6 +285,33 @@ nonisolated private final class ChildProcess: @unchecked Sendable {
 
   // MARK: Spawning
 
+  /// The whole input in an unlinked temporary file, rewound for the child to read to EOF.
+  /// Nothing has to keep a pipe fed, so neither side can block on the other, and no name is
+  /// left on disk even if the app is killed.
+  private static func inputFile(_ data: Data) throws -> Int32 {
+    guard data.count <= CLIProcess.stdinLimit else { throw TranslatorError.launchFailed(E2BIG) }
+    var template = Array((NSTemporaryDirectory() + "translate-stdin-XXXXXX").utf8CString)
+    let fd = mkostemp(&template, O_CLOEXEC)
+    guard fd >= 0 else { throw TranslatorError.launchFailed(errno) }
+    unlink(template)
+    let written = data.withUnsafeBytes { buffer -> Bool in
+      var offset = 0
+      while offset < buffer.count {
+        let count = write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+        if count < 0, errno == EINTR { continue }
+        guard count > 0 else { return false }
+        offset += count
+      }
+      return true
+    }
+    guard written, lseek(fd, 0, SEEK_SET) == 0 else {
+      let code = errno
+      close(fd)
+      throw TranslatorError.launchFailed(code)
+    }
+    return fd
+  }
+
   private static func pipe() throws -> (read: Int32, write: Int32) {
     var fds: [Int32] = [0, 0]
     guard Darwin.pipe(&fds) == 0 else { throw TranslatorError.launchFailed(errno) }
@@ -284,11 +323,15 @@ nonisolated private final class ChildProcess: @unchecked Sendable {
     case failure(Int32)
   }
 
-  private static func spawn(_ command: CLICommand, stdout: Int32, stderr: Int32) -> Spawned {
+  private static func spawn(_ command: CLICommand, stdin: Int32?, stdout: Int32, stderr: Int32) -> Spawned {
     var actions: posix_spawn_file_actions_t?
     posix_spawn_file_actions_init(&actions)
     defer { posix_spawn_file_actions_destroy(&actions) }
-    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+    if let stdin {
+      posix_spawn_file_actions_adddup2(&actions, stdin, 0)
+    } else {
+      posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+    }
     posix_spawn_file_actions_adddup2(&actions, stdout, 1)
     posix_spawn_file_actions_adddup2(&actions, stderr, 2)
     posix_spawn_file_actions_addchdir_np(&actions, command.currentDirectory)

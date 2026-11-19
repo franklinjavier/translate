@@ -1,5 +1,7 @@
 # CLI isolation verification — 2026-10-15
 
+> Historical CLI-version checks. See [the 2026-11-19 verification](2026-11-19-model-pickers-fast.md) for current catalog discovery, Fast controls and single-prompt Codex requests.
+
 This supplements the translation-session reliability verification. Claude implemented the CLI isolation; Codex reviewed the changes and ran independent checks.
 
 ## Contract

@@ -28,12 +28,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"{}")
             return
         (directory / "request.json").write_bytes(body)
+        selected_model = json.loads(body)["model"]
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
         if self.path.endswith("/responses"):
             message = {"id": "msg_contract", "type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": "Hi."}]}
-            response = {"id": "resp_contract", "object": "response", "created_at": 1, "status": "completed", "model": "gpt-6-sol", "output": [message], "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+            response = {"id": "resp_contract", "object": "response", "created_at": 1, "status": "completed", "model": selected_model, "output": [message], "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
             events = [
                 {"type": "response.created", "response": dict(response, status="in_progress", output=[])},
                 {"type": "response.output_item.added", "output_index": 0, "item": dict(message, status="in_progress", content=[])},
@@ -43,7 +44,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ]
         else:
             events = [
-                {"type": "message_start", "message": {"id": "msg_contract", "type": "message", "role": "assistant", "model": "claude-haiku-5-5", "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 0}}},
+                {"type": "message_start", "message": {"id": "msg_contract", "type": "message", "role": "assistant", "model": selected_model, "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 0}}},
                 {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
                 {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi."}},
                 {"type": "content_block_stop", "index": 0},

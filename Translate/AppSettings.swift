@@ -143,6 +143,10 @@ struct AppSettings: Codable, Equatable {
   var claudeModel: String
   var codexPath: String
   var codexModel: String
+  /// Fast is chosen per CLI and stays off until the user turns it on. It only takes effect
+  /// on a model the CLI lists as Fast-capable; the saved model is never switched for it.
+  var claudeFast: Bool
+  var codexFast: Bool
   var targets: [TranslationTarget]
   var launchAtLogin: Bool
 
@@ -165,6 +169,8 @@ struct AppSettings: Codable, Equatable {
     claudeModel: String,
     codexPath: String,
     codexModel: String,
+    claudeFast: Bool = false,
+    codexFast: Bool = false,
     targets: [TranslationTarget],
     launchAtLogin: Bool
   ) {
@@ -174,13 +180,15 @@ struct AppSettings: Codable, Equatable {
     self.claudeModel = claudeModel
     self.codexPath = codexPath
     self.codexModel = codexModel
+    self.claudeFast = claudeFast
+    self.codexFast = codexFast
     self.targets = targets
     self.launchAtLogin = launchAtLogin
   }
 
   enum CodingKeys: String, CodingKey {
     case engine, previousEngine, claudePath, claudeModel, codexPath, codexModel
-    case targets, launchAtLogin
+    case claudeFast, codexFast, targets, launchAtLogin
     /// Read from settings saved before `engine` existed; never written.
     case backend, useAppleOnDeviceModel
   }
@@ -203,6 +211,8 @@ struct AppSettings: Codable, Equatable {
     claudeModel = try container.decodeIfPresent(String.self, forKey: .claudeModel) ?? ""
     codexPath = try container.decodeIfPresent(String.self, forKey: .codexPath) ?? ""
     codexModel = try container.decodeIfPresent(String.self, forKey: .codexModel) ?? ""
+    claudeFast = try container.decodeIfPresent(Bool.self, forKey: .claudeFast) ?? false
+    codexFast = try container.decodeIfPresent(Bool.self, forKey: .codexFast) ?? false
     targets = try container.decodeIfPresent([TranslationTarget].self, forKey: .targets)
       ?? [.english, .portuguese]
     launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
@@ -216,6 +226,8 @@ struct AppSettings: Codable, Equatable {
     try container.encode(claudeModel, forKey: .claudeModel)
     try container.encode(codexPath, forKey: .codexPath)
     try container.encode(codexModel, forKey: .codexModel)
+    try container.encode(claudeFast, forKey: .claudeFast)
+    try container.encode(codexFast, forKey: .codexFast)
     try container.encode(targets, forKey: .targets)
     try container.encode(launchAtLogin, forKey: .launchAtLogin)
   }
@@ -229,13 +241,25 @@ struct AppSettings: Codable, Equatable {
     engine = engine == .apple ? previousEngine : .apple
   }
 
-  /// What a translation started now would run with.
-  var engineConfiguration: EngineConfiguration {
+  /// What a translation started now would run with, never asking Claude for Fast.
+  var engineConfiguration: EngineConfiguration { engineConfiguration(claudeFastCapable: false) }
+
+  /// `claudeFastCapable` is what Claude's own model metadata says about the selected model;
+  /// without it Claude never asks for Fast. Codex carries the preference and checks it
+  /// against the catalog it runs with.
+  func engineConfiguration(claudeFastCapable: Bool) -> EngineConfiguration {
     switch engine {
     case .local: EngineConfiguration(engine: .local, executableOverride: "", model: LocalMLX.defaultModel)
     case .apple: EngineConfiguration(engine: .apple, executableOverride: "", model: "")
-    case .claude: EngineConfiguration(engine: .claude, executableOverride: claudePath, model: claudeModel)
-    case .codex: EngineConfiguration(engine: .codex, executableOverride: codexPath, model: codexModel)
+    case .claude:
+      EngineConfiguration(
+        engine: .claude,
+        executableOverride: claudePath,
+        model: claudeModel,
+        fastMode: claudeFast && claudeFastCapable
+      )
+    case .codex:
+      EngineConfiguration(engine: .codex, executableOverride: codexPath, model: codexModel, fastMode: codexFast)
     }
   }
 

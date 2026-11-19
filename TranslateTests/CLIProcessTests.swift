@@ -202,6 +202,49 @@ nonisolated final class CLIProcessTests {
     #expect(await !log.chunks.contains { $0.contains("\u{FFFD}") })
   }
 
+  @Test func stdinIsEmptyWithoutInput() async throws {
+    let log = OutputLog()
+    _ = try await CLIProcess.run(fakes.command(fakes.script("wc -c | tr -d ' '"))) { await log.append($0) }
+    #expect(await log.text == "0\n")
+  }
+
+  /// The bytes arrive whole and end in EOF, so a reader that waits for EOF finishes.
+  @Test func stdinDeliversTheInputThenEOF() async throws {
+    let input = Data(#"{"type":"control_request","request_id":"é"}"#.utf8 + [0x0A])
+    var command = fakes.command(try fakes.script("cat; echo done"))
+    command.stdin = input
+    let log = OutputLog()
+    let exit = try await CLIProcess.run(command) { await log.append($0) }
+    #expect(exit.status == 0)
+    #expect(await log.text == String(decoding: input, as: UTF8.self) + "done\n")
+  }
+
+  @Test func stdinCannotExceedItsLimit() async throws {
+    let marker = fakes.path("started")
+    var command = fakes.command(try fakes.script("touch \"$1\""), [marker])
+    command.stdin = Data(count: CLIProcess.stdinLimit + 1)
+    await #expect(throws: TranslatorError.self) {
+      _ = try await CLIProcess.run(command) { _ in }
+    }
+    #expect(!FileManager.default.fileExists(atPath: marker))
+  }
+
+  @Test func cancellationStopsAProcessThatReadInput() async throws {
+    let script = try fakes.script("""
+      cat > "$2"
+      echo $$ > "$1"
+      sleep 30
+      """)
+    var command = fakes.command(script, [fakes.path("pid"), fakes.path("input")])
+    command.stdin = Data("hello".utf8)
+    let task = Task { try await CLIProcess.run(command) { _ in } }
+    let pid = try await fakes.pid(in: "pid")
+    #expect(try String(contentsOfFile: fakes.path("input"), encoding: .utf8) == "hello")
+    task.cancel()
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(await FakeExecutables.exits(pid))
+  }
+
   @Test(arguments: [true, false])
   func stdoutIsATerminalOnlyWhenAsked(terminal: Bool) async throws {
     let script = try fakes.script("if [ -t 1 ]; then echo tty; else echo pipe; fi")

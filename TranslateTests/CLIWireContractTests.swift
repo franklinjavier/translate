@@ -9,8 +9,8 @@ import Testing
   "Set TEST_RUNNER_TRANSLATION_CLI_CONTRACT_TESTS=1 to check installed CLI payloads"
 ))
 struct CLIWireContractTests {
-  @Test(.timeLimit(.minutes(1)), arguments: [TranslationEngine.claude, .codex])
-  func installedCLIHasNoToolsOrExternalInstructions(engine: TranslationEngine) async throws {
+  @Test(.timeLimit(.minutes(1)), arguments: [TranslationEngine.claude, .codex], [false, true])
+  func installedCLIHasNoToolsOrExternalInstructions(engine: TranslationEngine, fastMode: Bool) async throws {
     let cli = try #require(ShellEnvironment.resolveExecutable(named: engine.executableName, override: ""))
     let fixtures = try FakeExecutables()
     defer { fixtures.remove() }
@@ -52,8 +52,15 @@ struct CLIWireContractTests {
         """
     }
     let executable = try fixtures.script(wrapper, name: engine.executableName)
+    let catalog = try await CLIModelDiscovery.discover(engine: engine, executable: executable)
+    #expect(catalog.options.first?.id == "")
+    #expect(!fixtures.exists("request.json"), "listing models must not generate a model response")
+    let selectedModel = engine == .codex
+      ? try #require(catalog.options.dropFirst().first?.id)
+      : "claude-opus-5-5"
+    #expect(catalog.supportsFast(selectedModel))
     let translator = Translator(configuration: EngineConfiguration(
-      engine: engine, executableOverride: executable, model: engine == .codex ? "gpt-6-sol" : "haiku"
+      engine: engine, executableOverride: executable, model: selectedModel, fastMode: fastMode
     ))
     let translated = try await translator.translate(
       text: "oi", targetLanguage: "english", onOutput: { _ in }, onPartial: { _ in }
@@ -61,12 +68,20 @@ struct CLIWireContractTests {
     #expect(translated == "Hi.")
     let raw = try Data(contentsOf: fixtures.directory.appendingPathComponent("request.json"))
     let request = try #require(JSONSerialization.jsonObject(with: raw) as? [String: Any])
+    #expect(request["model"] as? String == selectedModel, "speed must not switch models")
+    if engine == .claude {
+      #expect((request["speed"] as? String == "fast") == fastMode)
+    } else {
+      let tier = request["service_tier"] as? String ?? "default"
+      #expect(fastMode ? ["priority", "fast"].contains(tier) : tier == "default")
+    }
     #expect((request["tools"] as? [Any] ?? []).isEmpty)
     for input in request["input"] as? [[String: Any]] ?? [] where input["type"] as? String == "additional_tools" {
       #expect((input["tools"] as? [Any] ?? []).isEmpty)
     }
     let expectedUser = PromptBuilder.userPrompt(text: "oi", targetLanguage: "english")
     if engine == .codex {
+      #expect(request["instructions"] == nil || request["instructions"] as? String == "")
       let texts = (request["input"] as? [[String: Any]] ?? []).flatMap { input in
         (input["content"] as? [[String: Any]] ?? []).compactMap { $0["text"] as? String }
       }

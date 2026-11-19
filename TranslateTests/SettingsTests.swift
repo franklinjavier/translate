@@ -248,7 +248,7 @@ nonisolated enum SnapshotAppearance: String, CaseIterable, Sendable {
 
 /// Renders the settings screen into a PNG without ordering a window on screen, so nothing takes
 /// focus. Each engine renders in light and dark, and the size and background assertions run every
-/// time. The PNG is written as settings-<engine>-<appearance>.png (and its path printed) only when
+/// time. The PNG is written as settings-<engine>[-models]-<appearance>.png (and its path printed) only when
 /// SETTINGS_SNAPSHOT_DIR is set and non-empty (TEST_RUNNER_SETTINGS_SNAPSHOT_DIR under xcodebuild).
 struct SettingsSnapshotTests {
   @Test(arguments: TranslationEngine.allCases, SnapshotAppearance.allCases)
@@ -256,6 +256,40 @@ struct SettingsSnapshotTests {
     var settings = makeSettings(makeTargets(4))
     settings.engine = engine
     let model = AppModel(settings: settings, isLive: false)
+    try await render(model, appearance: appearance, name: "settings-\(engine.rawValue)-\(appearance.rawValue)")
+  }
+
+  /// A loaded model list with Fast on and a saved model the list no longer has. The list
+  /// comes from a stub, so no CLI runs.
+  @Test(arguments: [TranslationEngine.claude, .codex], SnapshotAppearance.allCases)
+  func rendersLoadedModelsOffscreen(engine: TranslationEngine, appearance: SnapshotAppearance) async throws {
+    let fakes = try FakeExecutables()
+    defer { fakes.remove() }
+    let executable = try fakes.script("exit 0", name: engine.executableName)
+    let catalog = CLIModelCatalog(
+      options: [
+        CLIModelCatalog.defaultOption(named: engine == .claude ? "Opus 5.5" : "GPT-6.2-Sol"),
+        CLIModelOption(id: "fast-model", name: engine == .claude ? "Opus 5.5" : "GPT-6.2-Sol"),
+        CLIModelOption(id: "standard-model", name: engine == .claude ? "Haiku 5.5" : "GPT-6-Luna"),
+      ],
+      fastModels: ["", "fast-model"]
+    )
+    let store = CLIModelStore { _, _ in catalog }
+    var settings = makeSettings(makeTargets(2))
+    settings.engine = engine
+    settings.claudePath = executable
+    settings.codexPath = executable
+    settings.claudeModel = "fast-model"
+    settings.codexModel = "fast-model"
+    settings.claudeFast = true
+    settings.codexFast = true
+    let model = AppModel(settings: settings, isLive: false, models: store)
+    await store.load(engine, override: executable)
+    #expect(model.isFastAvailable(for: engine))
+    try await render(model, appearance: appearance, name: "settings-\(engine.rawValue)-models-\(appearance.rawValue)")
+  }
+
+  private func render(_ model: AppModel, appearance: SnapshotAppearance, name: String) async throws {
     let view = NSHostingView(rootView: SettingsView(model: model))
     let window = NSWindow(
       contentRect: NSRect(origin: CGPoint(x: -20_000, y: -20_000), size: SettingsView.size),
@@ -268,12 +302,10 @@ struct SettingsSnapshotTests {
     view.layoutSubtreeIfNeeded()
     try await Task.sleep(for: .milliseconds(100))
     view.layoutSubtreeIfNeeded()
-
     let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
     view.cacheDisplay(in: view.bounds, to: rep)
     let png = try #require(rep.representation(using: .png, properties: [:]))
     #expect(rep.size == SettingsView.size)
-
     // Corners sit outside every section, so they show the bare background.
     let corners = [(1, 1), (rep.pixelsWide - 2, 1), (1, rep.pixelsHigh - 2), (rep.pixelsWide - 2, rep.pixelsHigh - 2)]
     for (x, y) in corners {
@@ -282,12 +314,11 @@ struct SettingsSnapshotTests {
         #expect(abs(component - appearance.backgroundWhite) < 0.02, "pixel (\(x), \(y)) is \(pixel)")
       }
     }
-
     // Normal runs write nothing; only an explicit directory produces files.
     guard let path = ProcessInfo.processInfo.environment["SETTINGS_SNAPSHOT_DIR"], !path.isEmpty else { return }
     let directory = URL(fileURLWithPath: path)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let url = directory.appending(path: "settings-\(engine.rawValue)-\(appearance.rawValue).png")
+    let url = directory.appending(path: "\(name).png")
     try png.write(to: url)
     print("Settings snapshot: \(url.path)")
   }

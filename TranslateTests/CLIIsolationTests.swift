@@ -4,7 +4,8 @@ import Testing
 @testable import Translate
 
 nonisolated extension FakeExecutables {
-  /// Two models still set up as coding agents, the way Codex's own catalog arrives.
+  /// Two models still set up as coding agents, the way Codex's own catalog arrives. Only the
+  /// first offers Fast; the second defaults to the priority tier without offering it.
   static let codexCatalog = """
     {"models":[
       {"slug":"fake-default","priority":1,"context_window":1000,"tool_mode":"code_mode_only",
@@ -12,9 +13,10 @@ nonisolated extension FakeExecutables {
        "experimental_supported_tools":["clock"],"multi_agent_version":"v2",
        "include_skills_usage_instructions":true,"include_plugin_usage_instructions":true,
        "include_apps_usage_instructions":true,"base_instructions":"AGENT INSTRUCTIONS",
-       "supported_reasoning_levels":[{"effort":"low"}]},
+       "supported_reasoning_levels":[{"effort":"low"}],
+       "service_tiers":[{"id":"priority","name":"Fast"}]},
       {"slug":"fake-other","priority":2,"tool_mode":"code_mode_only","multi_agent_version":"v2",
-       "base_instructions":"AGENT INSTRUCTIONS"}
+       "default_service_tier":"priority","base_instructions":"AGENT INSTRUCTIONS"}
     ]}
     """
 
@@ -85,8 +87,15 @@ nonisolated final class CLIIsolationTests {
     fakes.remove()
   }
 
-  func translate(_ engine: TranslationEngine, executable: String, model: String = "") async -> (Result<String, Error>, [String]) {
-    let translator = Translator(configuration: EngineConfiguration(engine: engine, executableOverride: executable, model: model))
+  func translate(
+    _ engine: TranslationEngine,
+    executable: String,
+    model: String = "",
+    fast: Bool = false
+  ) async -> (Result<String, Error>, [String]) {
+    let translator = Translator(configuration: EngineConfiguration(
+      engine: engine, executableOverride: executable, model: model, fastMode: fast
+    ))
     let traces = OutputLog()
     do {
       let text = try await translator.translate(
@@ -135,6 +144,7 @@ nonisolated final class CLIIsolationTests {
     #expect(arguments.contains("--disable-slash-commands"))
     #expect(arguments.contains("--no-session-persistence"))
     #expect(arguments.value(after: "--effort") == "low")
+    #expect(arguments.value(after: "--settings") == #"{"fastMode":false}"#)
     #expect(arguments.value(after: "--system-prompt") == PromptBuilder.systemPrompt)
     // --bare can't sign in with a subscription.
     #expect(!arguments.contains("--bare"))
@@ -180,13 +190,14 @@ nonisolated final class CLIIsolationTests {
     #expect(arguments.values(of: "--enable") == ["skip_host_skill_discovery"])
     let config = arguments.values(of: "-c")
     for expected in [
-      "project_doc_max_bytes=0", "developer_instructions=\"\"", "skills.bundled.enabled=false",
+      "project_doc_max_bytes=0", "instructions=\"\"", "skills.bundled.enabled=false",
       "skills.include_instructions=false", "tools.update_plan.enabled=false",
       "tools.experimental_request_user_input.enabled=false", "web_search=\"disabled\"",
       "mcp_servers={}", "plugins={}", "include_apps_instructions=false",
       "include_collaboration_mode_instructions=false", "include_permissions_instructions=false",
       "include_environment_context=false", "model_reasoning_effort=\"low\"",
       "model_reasoning_summary=\"none\"", "model_verbosity=\"low\"",
+      "service_tier=\"default\"", "features.fast_mode=false",
     ] {
       #expect(config.contains(expected), "missing -c \(expected)")
     }
@@ -198,8 +209,10 @@ nonisolated final class CLIIsolationTests {
       let entry = try #require(config.first { $0.hasPrefix("\(key)=") })
       return String(entry.dropFirst(key.count + 2).dropLast())
     }
-    let instructions = try String(contentsOfFile: try configPath("model_instructions_file"), encoding: .utf8)
-    #expect(instructions == PromptBuilder.systemPrompt)
+    // The prompt goes in exactly once, as developer instructions; no instructions file.
+    #expect(!config.contains { $0.hasPrefix("model_instructions_file=") })
+    #expect(config.filter { $0.contains("Brazilian software engineer") }.count == 1)
+    #expect(config.contains("developer_instructions=" + CodexIsolation.toml(PromptBuilder.systemPrompt)))
     let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: try configPath("model_catalog_json")))) as? [String: Any]
     let models = try #require(catalog?["models"] as? [[String: Any]])
     #expect(models.compactMap { $0["slug"] as? String } == ["fake-default", "fake-other"])
@@ -215,6 +228,47 @@ nonisolated final class CLIIsolationTests {
     let (result, _) = await translate(.codex, executable: codex, model: "fake-other")
     #expect(try result.get() == "Hello")
     #expect(try fakes.recordedArguments("exec-args").value(after: "--model") == "fake-other")
+  }
+
+  /// Fast is asked for only when requested and the catalog gives the model a Fast tier, with
+  /// the default resolved the way the CLI resolves it. Standard is always explicit, so
+  /// fake-other's `default_service_tier` never applies.
+  @Test(arguments: [
+    ("", true, true),
+    ("fake-default", true, true),
+    ("fake-other", true, false),
+    ("fake-default", false, false),
+    ("fake-other", false, false),
+  ])
+  func codexSendsAnExplicitSpeed(model: String, requested: Bool, fast: Bool) async throws {
+    let codex = try fakes.codexScript(exec: "printf 'Hello' > \"$out\"")
+    let (result, _) = await translate(.codex, executable: codex, model: model, fast: requested)
+    #expect(try result.get() == "Hello")
+    let arguments = try fakes.recordedArguments("exec-args")
+    let config = arguments.values(of: "-c")
+    #expect(config.filter { $0.hasPrefix("service_tier=") } == [fast ? #"service_tier="priority""# : #"service_tier="default""#])
+    #expect(config.filter { $0.hasPrefix("features.fast_mode=") } == ["features.fast_mode=\(fast)"])
+    // Speed never changes the model or the isolation around it.
+    #expect(arguments.value(after: "--model") == (model.isEmpty ? nil : model))
+    #expect(arguments.values(of: "--enable") == ["skip_host_skill_discovery"])
+    #expect(arguments.values(of: "--disable") == CodexIsolation.disabledFeatures)
+  }
+
+  @Test(arguments: [true, false])
+  func claudeSendsAnExplicitFastSetting(fast: Bool) async throws {
+    let dir = fakes.directory.path
+    let claude = try fakes.script("""
+      printf '%s\\0' "$@" > '\(dir)/claude-args'
+      printf '%s\\n' '{"type":"result","subtype":"success","result":"ok"}'
+      """, name: "claude")
+    let (result, _) = await translate(.claude, executable: claude, model: "opus", fast: fast)
+    #expect(try result.get() == "ok")
+    let arguments = try fakes.recordedArguments("claude-args")
+    #expect(arguments.values(of: "--settings") == [fast ? #"{"fastMode":true}"# : #"{"fastMode":false}"#])
+    #expect(arguments.value(after: "--model") == "opus")
+    #expect(arguments.value(after: "--tools") == "")
+    #expect(arguments.value(after: "--setting-sources") == "")
+    #expect(!arguments.contains("--bare"))
   }
 
   @Test func codexRefusesAModelItsCatalogDoesNotList() async throws {
@@ -273,9 +327,38 @@ nonisolated final class CLIIsolationTests {
     #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
   }
 
+  /// These TOML basic strings also use valid JSON escapes. Foundation checks the round-trip;
+  /// the installed-CLI contract checks the real TOML parser and the multiline prompt.
+  @Test func tomlStringsRoundTripThePromptAndAwkwardPaths() throws {
+    let samples = [
+      PromptBuilder.systemPrompt,
+      "/tmp/a \"quoted\"/back\\slash/models.json",
+      "line1\nline2\r\n\ttab\u{08}\u{0C}\u{01}\u{7F} \\n \"\"\" '''",
+      "",
+    ]
+    for sample in samples {
+      let encoded = CodexIsolation.toml(sample)
+      #expect(!encoded.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F })
+      #expect(try JSONDecoder().decode(String.self, from: Data(encoded.utf8)) == sample)
+    }
+  }
+
+  @Test func codexArgumentsSendThePromptOnceAsDeveloperInstructions() {
+    let directory = URL(fileURLWithPath: "/tmp/with \"quote\"/back\\slash")
+    let prepared = PreparedCodex(directory: directory, models: [], metadata: CLIModelCatalog(options: [], fastModels: []))
+    let arguments = CodexIsolation.execArguments(prepared, model: "m", fast: false, messageFile: "/tmp/out", prompt: "user")
+    let config = arguments.values(of: "-c")
+    #expect(config.contains("instructions=\"\""))
+    #expect(config.contains("developer_instructions=" + CodexIsolation.toml(PromptBuilder.systemPrompt)))
+    #expect(!config.contains { $0.hasPrefix("model_instructions_file=") })
+    #expect(config.contains("model_catalog_json=" + CodexIsolation.toml(prepared.catalog.path)))
+    #expect(arguments.last == "user")
+    #expect(config.filter { $0.hasPrefix("developer_instructions=") }.count == 1)
+  }
+
   @Test func sanitizedCatalogKeepsEveryModelAndStripsAgentMachinery() throws {
     let raw = Data(FakeExecutables.codexCatalog.utf8)
-    let catalog = try CodexIsolation.sanitizedCatalog(raw, instructions: "Translate.")
+    let catalog = try CodexIsolation.sanitizedCatalog(raw)
     #expect(catalog.models == ["fake-default", "fake-other"])
     let root = try #require(try JSONSerialization.jsonObject(with: catalog.data) as? [String: Any])
     let models = try #require(root["models"] as? [[String: Any]])
@@ -289,7 +372,7 @@ nonisolated final class CLIIsolationTests {
       #expect(model["include_skills_usage_instructions"] as? Bool == false)
       #expect(model["include_plugin_usage_instructions"] as? Bool == false)
       #expect(model["include_apps_usage_instructions"] as? Bool == false)
-      #expect(model["base_instructions"] as? String == "Translate.")
+      #expect(model["base_instructions"] as? String == "")
     }
     // Everything else about a model stays as the CLI described it.
     #expect(models[0]["context_window"] as? Int == 1000)

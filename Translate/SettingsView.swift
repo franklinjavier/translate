@@ -21,7 +21,7 @@ struct SettingsView: View {
   @Bindable var model: AppModel
   @State private var accessibilityGranted = TextCapture.isTrusted
 
-  static let size = CGSize(width: 460, height: 560)
+  static let size = CGSize(width: 460, height: 600)
 
   var body: some View {
     ScrollView {
@@ -101,6 +101,27 @@ struct SettingsView: View {
       SettingsDivider()
       engineDetails
     }
+    // Restarts when the engine or path changes, cancelling a query for the old one. The pause
+    // keeps a path being typed from launching a CLI per keystroke.
+    .task(id: modelQuery) {
+      guard let engine = modelQuery?.engine else { return }
+      try? await Task.sleep(for: .milliseconds(350))
+      guard !Task.isCancelled else { return }
+      await model.loadModels(for: engine)
+    }
+  }
+
+  private struct ModelQuery: Equatable {
+    var engine: TranslationEngine
+    var path: String
+  }
+
+  private var modelQuery: ModelQuery? {
+    switch model.settings.engine {
+    case .claude: ModelQuery(engine: .claude, path: model.settings.claudePath)
+    case .codex: ModelQuery(engine: .codex, path: model.settings.codexPath)
+    case .local, .apple: nil
+    }
   }
 
   /// Only what the selected engine uses: Claude and Codex get their model and path,
@@ -113,18 +134,115 @@ struct SettingsView: View {
     case .apple:
       captionRow("\(AppleTranslation.availabilitySummary) Translates between languages only; it can’t proofread text already in the target language.")
     case .claude:
-      captionRow("Runs the Claude CLI on this Mac. Leave Model blank for its default.")
+      captionRow("Runs the Claude CLI on this Mac.")
       SettingsDivider()
-      fieldRow("Model", text: $model.settings.claudeModel, prompt: "sonnet, opus, fable…")
+      modelRows(.claude, selection: $model.settings.claudeModel, path: model.settings.claudePath)
+      SettingsDivider()
+      fastRow(.claude, isOn: $model.settings.claudeFast)
       SettingsDivider()
       fieldRow("Path", text: $model.settings.claudePath, prompt: "~/.local/bin/claude")
     case .codex:
-      captionRow("Runs the Codex CLI on this Mac. Leave Model blank for its default.")
+      captionRow("Runs the Codex CLI on this Mac.")
       SettingsDivider()
-      fieldRow("Model", text: $model.settings.codexModel, prompt: "Leave blank for default")
+      modelRows(.codex, selection: $model.settings.codexModel, path: model.settings.codexPath)
+      SettingsDivider()
+      fastRow(.codex, isOn: $model.settings.codexFast)
       SettingsDivider()
       fieldRow("Path", text: $model.settings.codexPath, prompt: "~/.volta/bin/codex")
     }
+  }
+
+  /// The CLI's own list once it has answered. Until then, or if it can't, the CLI default and
+  /// the saved model stay selectable; a saved model the list doesn't have stays as written.
+  @ViewBuilder
+  private func modelRows(_ engine: TranslationEngine, selection: Binding<String>, path: String) -> some View {
+    let state = model.models.state(for: engine, override: path)
+    let picker = CLIModelCatalog.picker(state.catalog, selected: selection.wrappedValue)
+    SettingsRow {
+      Text("Model")
+        .font(.system(size: SettingsMetrics.bodySize))
+        .frame(width: 56, alignment: .leading)
+      Picker("Model", selection: pickOnly(selection)) {
+        if let saved = picker.saved {
+          Text(saved.name).tag(saved.id)
+          Divider()
+        }
+        ForEach(picker.options) { option in
+          Text(option.name).tag(option.id)
+        }
+      }
+      .pickerStyle(.menu)
+      .labelsHidden()
+      .font(.system(size: 14))
+      .controlSize(.regular)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      if state.isLoading {
+        ProgressView()
+          .controlSize(.small)
+          .frame(width: 16, height: 16)
+      } else {
+        Button {
+          Task { await model.loadModels(for: engine, force: true) }
+        } label: {
+          Image(systemName: "arrow.clockwise")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Color.primary.opacity(0.6))
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Refresh models")
+        .accessibilityLabel("Refresh models")
+      }
+    }
+    if let failure = state.failure {
+      captionRow(state.catalog == nil ? failure : "\(failure) Showing the last list.")
+    }
+  }
+
+  /// Writes only a real change, so a menu showing the same entry never rewrites the setting.
+  private func pickOnly(_ selection: Binding<String>) -> Binding<String> {
+    Binding(
+      get: { selection.wrappedValue },
+      set: { if $0 != selection.wrappedValue { selection.wrappedValue = $0 } }
+    )
+  }
+
+  /// The saved preference, shown on only while the selected model can use it. Picking a
+  /// model without Fast never changes the preference or the model.
+  private func fastRow(_ engine: TranslationEngine, isOn preference: Binding<Bool>) -> some View {
+    let available = model.isFastAvailable(for: engine)
+    return SettingsRow {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Fast")
+          .font(.system(size: SettingsMetrics.bodySize))
+        Text(fastHint(engine, available: available))
+          .font(.system(size: SettingsMetrics.captionSize))
+          .foregroundStyle(Color.primary.opacity(SettingsMetrics.captionOpacity))
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer(minLength: 12)
+      Toggle("Fast", isOn: Binding(
+        get: { available && preference.wrappedValue },
+        set: { preference.wrappedValue = $0 }
+      ))
+      .toggleStyle(.switch)
+      .labelsHidden()
+      .controlSize(.small)
+      .disabled(!available)
+    }
+  }
+
+  private func fastHint(_ engine: TranslationEngine, available: Bool) -> String {
+    let path = engine == .claude ? model.settings.claudePath : model.settings.codexPath
+    guard available else {
+      return model.models.catalog(for: engine, override: path) == nil
+        ? "Available once the CLI lists its models."
+        : "Not available for this model."
+    }
+    return engine == .claude
+      ? "Billed as extra usage, outside your plan’s limits."
+      : "Uses more of your plan’s usage."
   }
 
   private func captionRow(_ text: String) -> some View {

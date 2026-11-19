@@ -107,4 +107,52 @@ struct EngineSelectionTests {
     settings.engine = .apple
     #expect(settings.engineConfiguration == EngineConfiguration(engine: .apple, executableOverride: "", model: ""))
   }
+
+  // MARK: Fast
+
+  @Test func settingsSavedBeforeFastDecodeWithFastOff() throws {
+    let settings = try decode(#"{"engine":"claude","claudeModel":"opus","codexModel":"gpt-6-sol"}"#)
+    #expect(!settings.claudeFast)
+    #expect(!settings.codexFast)
+    #expect(settings.claudeModel == "opus")
+    #expect(settings.codexModel == "gpt-6-sol")
+    #expect(!AppSettings.default.claudeFast)
+    #expect(!AppSettings.default.codexFast)
+  }
+
+  @Test(arguments: [(true, false), (false, true), (true, true)])
+  func fastPreferencesAreIndependentAndRoundTrip(claude: Bool, codex: Bool) throws {
+    var settings = AppSettings.default
+    settings.claudeFast = claude
+    settings.codexFast = codex
+    let data = try JSONEncoder().encode(settings)
+    let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(object["claudeFast"] as? Bool == claude)
+    #expect(object["codexFast"] as? Bool == codex)
+    #expect(try JSONDecoder().decode(AppSettings.self, from: data) == settings)
+  }
+
+  /// Claude asks for Fast only when its metadata lists the model as capable; Codex carries
+  /// the preference and checks it against the catalog it runs with.
+  @Test func configurationCarriesOnlyTheSelectedEnginesFast() {
+    var settings = AppSettings.default
+    settings.claudeFast = true
+    settings.codexFast = false
+    settings.claudeModel = "opus"
+    settings.engine = .claude
+    #expect(settings.engineConfiguration.fastMode == false, "unknown capability never asks for Fast")
+    #expect(settings.engineConfiguration(claudeFastCapable: true).fastMode)
+    #expect(settings.engineConfiguration(claudeFastCapable: true).model == "opus")
+    settings.engine = .codex
+    #expect(!settings.engineConfiguration(claudeFastCapable: true).fastMode)
+    settings.codexFast = true
+    #expect(settings.engineConfiguration.fastMode)
+    settings.claudeFast = false
+    settings.engine = .claude
+    #expect(!settings.engineConfiguration(claudeFastCapable: true).fastMode)
+    for engine in [TranslationEngine.local, .apple] {
+      settings.engine = engine
+      #expect(!settings.engineConfiguration(claudeFastCapable: true).fastMode)
+    }
+  }
 }

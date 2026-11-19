@@ -31,7 +31,7 @@ nonisolated enum TranslatorError: LocalizedError, Sendable {
     case .isolationFailed(let message):
       return message
     case .unknownModel(let model):
-      return "The CLI doesn't list the model “\(model)”. Pick another in Settings, or leave it blank for the CLI's default."
+      return "The CLI doesn't list the model “\(model)”. Pick another model or CLI default in Settings."
     }
   }
 
@@ -56,6 +56,10 @@ nonisolated struct EngineConfiguration: Sendable, Equatable {
   var engine: TranslationEngine
   var executableOverride: String
   var model: String
+  /// Ask the CLI for its Fast speed. Claude only gets this for a model its metadata lists as
+  /// capable; Codex re-checks the model against the catalog it runs with. Off sends Standard
+  /// explicitly, so neither a CLI setting nor a catalog default turns Fast on.
+  var fastMode = false
 }
 
 nonisolated struct Translator: Sendable {
@@ -164,12 +168,16 @@ nonisolated struct Translator: Sendable {
       "--safe-mode",
       "--effort", "low",
       "--permission-mode", "dontAsk",
+      // Explicit either way, so the CLI's own Fast setting never applies.
+      "--settings", configuration.fastMode ? #"{"fastMode":true}"# : #"{"fastMode":false}"#,
       "--system-prompt", PromptBuilder.systemPrompt,
     ]
     if !model.isEmpty {
       arguments += ["--model", model]
     }
     arguments.append(user)
+
+    await trace(configuration.fastMode ? "speed=fast" : "speed=standard")
 
     let parser = ClaudeStreamConsumer(onPartial: onPartial, trace: trace)
     let exit = try await run(
@@ -191,8 +199,8 @@ nonisolated struct Translator: Sendable {
   }
 
   /// Codex's stdout is progress, never the translation: the popover keeps loading until the
-  /// final message file is written. The system prompt goes in as the model instructions,
-  /// replacing Codex's agent instructions; see `CodexIsolation`.
+  /// final message file is written. The system prompt goes in once, as the developer
+  /// instructions, with Codex's agent instructions emptied; see `CodexIsolation`.
   private func runCodex(
     executable: String,
     model: String,
@@ -212,6 +220,10 @@ nonisolated struct Translator: Sendable {
       await trace("model not in codex catalog")
       throw TranslatorError.unknownModel(model)
     }
+    // Fast only for a model this catalog lists with a Fast tier; the default is resolved
+    // the way the CLI resolves it.
+    let fast = configuration.fastMode && prepared.metadata.supportsFast(model)
+    await trace(fast ? "speed=fast" : "speed=standard")
 
     let workspace = prepared.directory.appendingPathComponent("run-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false)
@@ -220,7 +232,7 @@ nonisolated struct Translator: Sendable {
 
     let exit = try await run(
       executable: executable,
-      arguments: CodexIsolation.execArguments(prepared, model: model, messageFile: messageFile.path, prompt: user),
+      arguments: CodexIsolation.execArguments(prepared, model: model, fast: fast, messageFile: messageFile.path, prompt: user),
       directory: workspace.path,
       terminal: false,
       trace: trace

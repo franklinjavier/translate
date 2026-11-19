@@ -16,6 +16,8 @@ final class AppModel {
   }
 
   let overlay: OverlayState
+  /// The CLIs' model lists: saved from earlier sessions, refreshed while Settings is open.
+  let models: CLIModelStore
 
   /// False keeps settings in memory and leaves global shortcuts, the selection tracker,
   /// the pasteboard and login items alone, for tests and offscreen snapshots.
@@ -29,7 +31,12 @@ final class AppModel {
   }
 
   /// `coordinator` replaces the one wired to the panel and live boundaries, for tests.
-  init(settings: AppSettings, isLive: Bool, coordinator: TranslationCoordinator? = nil) {
+  init(
+    settings: AppSettings,
+    isLive: Bool,
+    coordinator: TranslationCoordinator? = nil,
+    models: CLIModelStore? = nil
+  ) {
     let panel = OverlayPanel()
     let session = coordinator ?? TranslationCoordinator(
       overlay: OverlayState(),
@@ -39,6 +46,8 @@ final class AppModel {
     panel.state = session.overlay
     self.settings = settings
     self.isLive = isLive
+    // Only the live app reads and writes saved model lists.
+    self.models = models ?? CLIModelStore(cache: isLive ? CLIModelCache.live : nil)
     self.overlay = session.overlay
     self.panel = panel
     self.session = session
@@ -62,11 +71,33 @@ final class AppModel {
 
   /// Snapshots the engine settings now; changing them mid-translation affects the next one.
   func translate(to target: TranslationTarget) {
-    session.translate(to: target, configuration: settings.engineConfiguration)
+    session.translate(to: target, configuration: engineConfiguration)
   }
 
   func retryLastTranslation() {
-    session.retry(configuration: settings.engineConfiguration)
+    session.retry(configuration: engineConfiguration)
+  }
+
+  /// The settings with Claude's Fast checked against its loaded or saved model list. Without
+  /// one Claude runs Standard; Codex checks its own catalog per translation.
+  var engineConfiguration: EngineConfiguration {
+    settings.engineConfiguration(claudeFastCapable: isFastAvailable(for: .claude))
+  }
+
+  /// Whether the CLI's metadata lists the engine's selected model as Fast-capable.
+  func isFastAvailable(for engine: TranslationEngine) -> Bool {
+    switch engine {
+    case .claude: models.catalog(for: .claude, override: settings.claudePath)?.supportsFast(settings.claudeModel) ?? false
+    case .codex: models.catalog(for: .codex, override: settings.codexPath)?.supportsFast(settings.codexModel) ?? false
+    case .local, .apple: false
+    }
+  }
+
+  /// Settings asks for the selected CLI's models; tests and snapshots never launch a CLI.
+  func loadModels(for engine: TranslationEngine, force: Bool = false) async {
+    guard isLive else { return }
+    let path = engine == .claude ? settings.claudePath : settings.codexPath
+    await models.load(engine, override: path, force: force)
   }
 
   func copyTranslation() {
